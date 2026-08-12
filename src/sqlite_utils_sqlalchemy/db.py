@@ -7,11 +7,12 @@ import pathlib
 import uuid
 from collections.abc import Generator, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple, Self
+from typing import Any, NamedTuple
 
 import sqlalchemy as sa
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.schema import CreateTable
+from typing_extensions import Self
 
 
 class NoTable(Exception):
