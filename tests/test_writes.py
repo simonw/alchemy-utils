@@ -14,7 +14,7 @@ def test_insert_all_infers_union_of_columns(db):
 
     table = db["items"].insert_all(records, pk="id")
 
-    assert table is db.table("items").insert_all([])
+    assert table.insert_all([]) is table
     assert table.pks == ["id"]
     assert set(table.columns_dict) == {"id", "name", "score"}
     assert sorted(table.rows, key=lambda row: row["id"]) == [
@@ -87,10 +87,10 @@ def test_upsert_all_supports_compound_primary_keys(db):
         ]
     )
 
+    assert table.last_pk is None
     assert table.get(("A", 1))["stock"] == 8
     assert table.get(("A", 2))["stock"] == 4
     assert table.get(("B", 1))["stock"] == 2
-    assert table.last_pk is None
 
 
 def test_upsert_validates_primary_key_values(db):

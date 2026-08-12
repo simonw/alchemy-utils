@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from testing.postgresql import Postgresql
 
 from sqlalchemy_utils import Database
@@ -37,7 +37,7 @@ def _postgres_binary(name: str) -> str | None:
 
 
 @pytest.fixture(scope="session")
-def postgres_cluster() -> Generator[Postgresql, None, None]:
+def postgres_cluster() -> Generator[Postgresql]:
     postgres = _postgres_binary("postgres")
     initdb = _postgres_binary("initdb")
     if not postgres or not initdb:
@@ -50,7 +50,7 @@ def postgres_cluster() -> Generator[Postgresql, None, None]:
 
 
 @pytest.fixture
-def postgres_url(postgres_cluster: Postgresql) -> Generator[URL, None, None]:
+def postgres_url(postgres_cluster: Postgresql) -> Generator[URL]:
     dsn = postgres_cluster.dsn()
     admin_url = URL.create(
         "postgresql+psycopg",
@@ -68,14 +68,12 @@ def postgres_url(postgres_cluster: Postgresql) -> Generator[URL, None, None]:
         yield admin_url.set(database=database_name)
     finally:
         with admin.connect() as connection:
-            connection.exec_driver_sql(
-                f'DROP DATABASE "{database_name}" WITH (FORCE)'
-            )
+            connection.exec_driver_sql(f'DROP DATABASE "{database_name}" WITH (FORCE)')
         admin.dispose()
 
 
 @pytest.fixture(params=("sqlite", "duckdb", "postgresql"))
-def engine(request: pytest.FixtureRequest, tmp_path: Path) -> Generator[Engine, None, None]:
+def engine(request: pytest.FixtureRequest, tmp_path: Path) -> Generator[Engine]:
     if request.param == "sqlite":
         url = URL.create("sqlite+pysqlite", database=str(tmp_path / "test.sqlite"))
     elif request.param == "duckdb":
@@ -90,7 +88,7 @@ def engine(request: pytest.FixtureRequest, tmp_path: Path) -> Generator[Engine, 
 
 
 @pytest.fixture
-def db(engine: Engine) -> Generator[Database, None, None]:
+def db(engine: Engine) -> Generator[Database]:
     database = Database(engine)
     try:
         yield database

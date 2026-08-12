@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import itertools
 import pathlib
 import uuid
 from collections.abc import Generator, Iterable, Mapping
@@ -98,14 +99,39 @@ def _suggest_type(values: Iterable[Any]) -> type[Any]:
 class Database:
     """Small sqlite-utils-shaped wrapper around a SQLAlchemy engine."""
 
+    def __new__(cls, engine_or_url: Engine | str | pathlib.Path) -> Self:
+        if cls is Database:
+            engine = cls._coerce_engine(engine_or_url)
+            # Lazy imports avoid a cycle: dialect subclasses inherit this class.
+            from .databases.duckdb import DuckDBDatabase
+            from .databases.postgresql import PostgreSQLDatabase
+            from .databases.sqlite import SQLiteDatabase
+
+            database_class = {
+                "duckdb": DuckDBDatabase,
+                "postgresql": PostgreSQLDatabase,
+                "sqlite": SQLiteDatabase,
+            }.get(engine.dialect.name, Database)
+            instance = super().__new__(database_class)
+            instance._factory_engine = engine
+            return instance
+        return super().__new__(cls)
+
     def __init__(self, engine_or_url: Engine | str | pathlib.Path):
-        if isinstance(engine_or_url, Engine):
-            self.engine = engine_or_url
+        if hasattr(self, "_factory_engine"):
+            self.engine = self._factory_engine
+            del self._factory_engine
         else:
-            value = str(engine_or_url)
-            if "://" not in value:
-                value = f"sqlite+pysqlite:///{value}"
-            self.engine = sa.create_engine(value)
+            self.engine = self._coerce_engine(engine_or_url)
+
+    @staticmethod
+    def _coerce_engine(engine_or_url: Engine | str | pathlib.Path) -> Engine:
+        if isinstance(engine_or_url, Engine):
+            return engine_or_url
+        value = str(engine_or_url)
+        if "://" not in value:
+            value = f"sqlite+pysqlite:///{value}"
+        return sa.create_engine(value)
 
     def __enter__(self) -> Self:
         return self
@@ -124,6 +150,75 @@ class Database:
 
     def table(self, table_name: str, **kwargs: Any) -> Table:
         return Table(self, table_name, **kwargs)
+
+    def create_table(
+        self, name: str, columns: Mapping[str, Any], **kwargs: Any
+    ) -> Table:
+        return self.table(name).create(columns, **kwargs)
+
+    def reflect_table(self, table_name: str) -> sa.Table:
+        return sa.Table(table_name, sa.MetaData(), autoload_with=self.engine)
+
+    def primary_keys(self, table_name: str) -> list[str]:
+        return list(
+            sa.inspect(self.engine)
+            .get_pk_constraint(table_name)
+            .get("constrained_columns")
+            or []
+        )
+
+    def introspect_columns(self, table_name: str) -> list[dict[str, Any]]:
+        return sa.inspect(self.engine).get_columns(table_name)
+
+    def insert_statement(self, table: sa.Table) -> Any:
+        raise NotImplementedError(
+            f"Inserts are not implemented for {self.engine.dialect.name}"
+        )
+
+    def insert_ignore_statement(self, table: sa.Table) -> Any:
+        del table
+        raise NotImplementedError(
+            f"Insert ignore is not implemented for {self.engine.dialect.name}"
+        )
+
+    def insert_replace_statement(
+        self, table: sa.Table, pk_names: list[str], update_names: list[str]
+    ) -> Any:
+        del table, pk_names, update_names
+        raise NotImplementedError(
+            f"Insert replace is not implemented for {self.engine.dialect.name}"
+        )
+
+    def upsert_statement(
+        self, table: sa.Table, pk_names: list[str], update_names: list[str]
+    ) -> Any:
+        del table, pk_names, update_names
+        raise NotImplementedError(
+            f"Upsert is not implemented for {self.engine.dialect.name}"
+        )
+
+    def add_column(
+        self,
+        table_name: str,
+        column_name: str,
+        sql_type: sa.types.TypeEngine[Any],
+    ) -> None:
+        type_sql = sql_type.compile(self.engine.dialect)
+        preparer = self.engine.dialect.identifier_preparer
+        sql = f"ALTER TABLE {preparer.quote(table_name)} ADD COLUMN {preparer.quote(column_name)} {type_sql}"
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(sql)
+
+    def primary_key_column_options(
+        self,
+        metadata: sa.MetaData,
+        table_name: str,
+        column_name: str,
+        sql_type: sa.types.TypeEngine[Any],
+        pk_count: int,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        del metadata, table_name, column_name
+        return [], {"autoincrement": isinstance(sql_type, sa.Integer) and pk_count == 1}
 
     def table_names(self) -> list[str]:
         return sa.inspect(self.engine).get_table_names()
@@ -167,68 +262,25 @@ class Table:
     def _sa_table(self) -> sa.Table:
         if not self.exists():
             raise NoTable(f"Table {self.name} does not exist")
-        table = sa.Table(self.name, sa.MetaData(), autoload_with=self.db.engine)
-        if self.db.engine.dialect.name == "duckdb":
-            # duckdb-engine 0.17 reflects DuckDB's native JSON as VARCHAR,
-            # which skips SQLAlchemy's JSON result decoder. Patch that known
-            # reflection gap using DuckDB's catalog table.
-            with self.db.engine.connect() as connection:
-                native_types = {
-                    row.column_name: row.data_type
-                    for row in connection.execute(
-                        sa.text(
-                            """
-                            select column_name, data_type
-                            from duckdb_columns()
-                            where schema_name = :schema and table_name = :table_name
-                            """
-                        ),
-                        {
-                            "schema": sa.inspect(self.db.engine).default_schema_name
-                            or "main",
-                            "table_name": self.name,
-                        },
-                    )
-                }
-            for column in table.columns:
-                if native_types.get(column.name) == "JSON":
-                    column.type = sa.JSON()
-        return table
+        return self.db.reflect_table(self.name)
 
     def _primary_keys(self) -> list[str]:
-        inspector = sa.inspect(self.db.engine)
-        reflected = list(
-            inspector.get_pk_constraint(self.name).get("constrained_columns") or []
-        )
-        if reflected or self.db.engine.dialect.name != "duckdb":
-            return reflected
+        return self.db.primary_keys(self.name)
 
-        # duckdb-engine 0.17 does not reflect indexes or primary keys yet.
-        # DuckDB's standard information_schema views preserve compound-key order.
-        query = sa.text(
-            """
-            select kcu.column_name
-            from information_schema.table_constraints tc
-            join information_schema.key_column_usage kcu
-              on tc.constraint_catalog = kcu.constraint_catalog
-             and tc.constraint_schema = kcu.constraint_schema
-             and tc.constraint_name = kcu.constraint_name
-            where tc.table_schema = :schema
-              and tc.table_name = :table_name
-              and tc.constraint_type = 'PRIMARY KEY'
-            order by kcu.ordinal_position
-            """
-        )
-        with self.db.engine.connect() as connection:
-            return list(
-                connection.scalars(
-                    query,
-                    {
-                        "schema": inspector.default_schema_name or "main",
-                        "table_name": self.name,
-                    },
-                )
-            )
+    def _effective_pk(self, pk: str | tuple[str, ...] | list[str] | None) -> list[str]:
+        value = pk or self._defaults.get("pk") or (self.pks if self.exists() else [])
+        return [value] if isinstance(value, str) else list(value or ())
+
+    def _ensure_missing_columns(self, records: Iterable[Mapping[str, Any]]) -> None:
+        current = set(self.columns_dict)
+        values_by_name: dict[str, list[Any]] = {}
+        for record in records:
+            for name, value in record.items():
+                if name not in current:
+                    values_by_name.setdefault(name, []).append(value)
+        for name, values in values_by_name.items():
+            sql_type = _to_sqlalchemy_type(_suggest_type(values))
+            self.db.add_column(self.name, name, sql_type)
 
     def create(
         self,
@@ -244,7 +296,9 @@ class Table:
         ignore: bool = False,
         **unsupported: Any,
     ) -> Self:
-        del foreign_keys, defaults, unsupported
+        del foreign_keys, unsupported
+        if not columns:
+            raise ValueError("Tables must have at least one column")
         if pk is None:
             pk = self._defaults.get("pk")
         if self.exists():
@@ -255,23 +309,41 @@ class Table:
 
         pk_names = [pk] if isinstance(pk, str) else list(pk or ())
         not_null_names = set(not_null or ())
-        ordered_names = list(column_order or ())
+        columns = dict(columns)
+        if len(pk_names) == 1 and pk_names[0] not in columns:
+            columns = {pk_names[0]: int, **columns}
+
+        ordered_names = [name for name in column_order or () if name in columns]
         ordered_names.extend(name for name in columns if name not in ordered_names)
 
         metadata = sa.MetaData()
         sa_columns = []
         for name in ordered_names:
             is_pk = name in pk_names
-            sa_columns.append(
-                sa.Column(
+            sql_type = _to_sqlalchemy_type(columns[name])
+            args: list[Any] = []
+            column_kwargs: dict[str, Any] = {
+                "primary_key": is_pk and len(pk_names) == 1,
+                "nullable": not (is_pk or name in not_null_names),
+            }
+            if is_pk:
+                pk_args, pk_options = self.db.primary_key_column_options(
+                    metadata,
+                    self.name,
                     name,
-                    _to_sqlalchemy_type(columns[name]),
-                    primary_key=is_pk and len(pk_names) == 1,
-                    nullable=False if is_pk or name in not_null_names else True,
-                    # Avoid duckdb-engine rendering integer PKs as SERIAL.
-                    autoincrement=False if is_pk else "auto",
+                    sql_type,
+                    len(pk_names),
                 )
-            )
+                args.extend(pk_args)
+                column_kwargs.update(pk_options)
+            if defaults and name in defaults:
+                default = defaults[name]
+                column_kwargs["server_default"] = (
+                    default
+                    if isinstance(default, sa.sql.ClauseElement)
+                    else sa.literal(default)
+                )
+            sa_columns.append(sa.Column(name, sql_type, *args, **column_kwargs))
         constraints: list[sa.PrimaryKeyConstraint] = []
         if len(pk_names) > 1:
             constraints.append(sa.PrimaryKeyConstraint(*pk_names))
@@ -286,21 +358,123 @@ class Table:
         pk: str | tuple[str, ...] | list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
+        return self.insert_all([record], pk=pk, **kwargs)
+
+    def insert_all(
+        self,
+        records: Iterable[Mapping[str, Any]],
+        pk: str | tuple[str, ...] | list[str] | None = None,
+        *,
+        batch_size: int = 100,
+        alter: bool = False,
+        ignore: bool = False,
+        replace: bool = False,
+        truncate: bool = False,
+        upsert: bool = False,
+        columns: Mapping[str, Any] | None = None,
+        **create_kwargs: Any,
+    ) -> Self:
+        del batch_size
+        if ignore and replace:
+            raise ValueError("Use either ignore=True or replace=True, not both")
+        records_list = [dict(record) for record in records]
+        self.last_pk = None
+        self.last_rowid = None
+        if not records_list:
+            return self
+
         if not self.exists():
-            self.create(
-                {name: _suggest_type([value]) for name, value in record.items()},
-                pk=pk,
-                **kwargs,
-            )
+            names = list(dict.fromkeys(itertools.chain.from_iterable(records_list)))
+            inferred = {
+                name: _suggest_type(record.get(name) for record in records_list)
+                for name in names
+            }
+            inferred.update(columns or {})
+            self.create(inferred, pk=pk, **create_kwargs)
+        elif alter:
+            self._ensure_missing_columns(records_list)
+
         table = self._sa_table()
-        with self.db.engine.begin() as connection:
-            result = connection.execute(sa.insert(table).values(dict(record)))
-        pks = self.pks
-        if pks and all(name in record for name in pks):
-            values = tuple(record[name] for name in pks)
-            self.last_pk = values[0] if len(values) == 1 else values
-        elif result.inserted_primary_key:
-            values = tuple(result.inserted_primary_key)
+        table_names = [column.name for column in table.columns]
+        normalized = [
+            {
+                name: record.get(name)
+                for name in table_names
+                if name in record
+                or name in set().union(*(r.keys() for r in records_list))
+            }
+            for record in records_list
+        ]
+        # Avoid supplying omitted generated primary keys as explicit NULLs.
+        for record, normalized_record in zip(records_list, normalized):
+            for name in self.pks:
+                if name not in record:
+                    normalized_record.pop(name, None)
+
+        if truncate:
+            with self.db.engine.begin() as connection:
+                connection.execute(sa.delete(table))
+
+        if upsert:
+            pk_names = self._effective_pk(pk)
+            if not pk_names:
+                raise PrimaryKeyRequired("upsert() requires a pk")
+            for record in records_list:
+                if any(record.get(name) is None for name in pk_names):
+                    raise PrimaryKeyRequired(
+                        "upsert() requires values for every pk column"
+                    )
+            with self.db.engine.begin() as connection:
+                for record in normalized:
+                    update_names = [name for name in record if name not in pk_names]
+                    statement = self.db.upsert_statement(table, pk_names, update_names)
+                    connection.execute(statement, record)
+        else:
+            if ignore:
+                statement = self.db.insert_ignore_statement(table)
+            elif replace:
+                pk_names = self.pks
+                if not pk_names:
+                    raise PrimaryKeyRequired("replace=True requires a primary key")
+                update_names = [name for name in table_names if name not in pk_names]
+                statement = self.db.insert_replace_statement(
+                    table, pk_names, update_names
+                )
+            else:
+                statement = self.db.insert_statement(table)
+            returned_pk: tuple[Any, ...] | None = None
+            single_generated_pk = (
+                len(records_list) == 1
+                and bool(self.pks)
+                and not all(name in records_list[0] for name in self.pks)
+                and not ignore
+            )
+            with self.db.engine.begin() as connection:
+                if single_generated_pk:
+                    result = connection.execute(
+                        statement.returning(*(table.c[name] for name in self.pks)),
+                        normalized[0],
+                    )
+                    returned_pk = tuple(result.one())
+                else:
+                    result = connection.execute(statement, normalized)
+
+            if len(records_list) == 1:
+                pk_names = self.pks
+                original = records_list[0]
+                if pk_names and all(name in original for name in pk_names):
+                    values = tuple(original[name] for name in pk_names)
+                    self.last_pk = values[0] if len(values) == 1 else values
+                elif returned_pk is not None:
+                    values = returned_pk
+                    self.last_pk = values[0] if len(values) == 1 else values
+                elif result.inserted_primary_key:
+                    values = tuple(result.inserted_primary_key)
+                    self.last_pk = values[0] if len(values) == 1 else values
+
+        if upsert and len(records_list) == 1:
+            pk_names = self._effective_pk(pk)
+            values = tuple(records_list[0][name] for name in pk_names)
             self.last_pk = values[0] if len(values) == 1 else values
         return self
 
@@ -310,11 +484,48 @@ class Table:
         pk: str | tuple[str, ...] | list[str] | None = None,
         **kwargs: Any,
     ) -> Self:
-        del kwargs
-        effective_pk = pk or self._defaults.get("pk") or (self.pks if self.exists() else [])
+        effective_pk = (
+            pk or self._defaults.get("pk") or (self.pks if self.exists() else [])
+        )
         if not effective_pk:
             raise PrimaryKeyRequired("upsert() requires a pk")
-        raise NotImplementedError
+        return self.upsert_all([record], pk=pk, **kwargs)
+
+    def upsert_all(
+        self,
+        records: Iterable[Mapping[str, Any]],
+        pk: str | tuple[str, ...] | list[str] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        return self.insert_all(records, pk=pk, upsert=True, **kwargs)
+
+    def update(
+        self,
+        pk_values: Any,
+        updates: Mapping[str, Any] | None = None,
+        *,
+        alter: bool = False,
+        conversions: Mapping[str, Any] | None = None,
+    ) -> Self:
+        if conversions:
+            raise NotImplementedError("SQL conversions are not portable")
+        self.get(pk_values)
+        updates = dict(updates or {})
+        if not updates:
+            return self
+        if alter:
+            self._ensure_missing_columns([updates])
+        table = self._sa_table()
+        values = (
+            list(pk_values) if isinstance(pk_values, (list, tuple)) else [pk_values]
+        )
+        criteria = sa.and_(
+            *(table.c[name] == value for name, value in zip(self.pks, values))
+        )
+        with self.db.engine.begin() as connection:
+            connection.execute(sa.update(table).where(criteria).values(updates))
+        self.last_pk = values[0] if len(values) == 1 else tuple(values)
+        return self
 
     @property
     def count(self) -> int:
@@ -323,7 +534,7 @@ class Table:
             return int(connection.scalar(sa.select(sa.func.count()).select_from(table)))
 
     @property
-    def rows(self) -> Generator[dict[str, Any], None, None]:
+    def rows(self) -> Generator[dict[str, Any]]:
         table = self._sa_table()
         with self.db.engine.connect() as connection:
             for row in connection.execute(sa.select(table)):
@@ -331,13 +542,19 @@ class Table:
 
     def get(self, pk_values: Any) -> dict[str, Any]:
         table = self._sa_table()
-        values = list(pk_values) if isinstance(pk_values, (list, tuple)) else [pk_values]
+        values = (
+            list(pk_values) if isinstance(pk_values, (list, tuple)) else [pk_values]
+        )
         pks = self.pks
         if not pks or len(pks) != len(values):
             raise NotFoundError
-        criteria = sa.and_(*(table.c[name] == value for name, value in zip(pks, values)))
+        criteria = sa.and_(
+            *(table.c[name] == value for name, value in zip(pks, values))
+        )
         with self.db.engine.connect() as connection:
-            row = connection.execute(sa.select(table).where(criteria)).mappings().first()
+            row = (
+                connection.execute(sa.select(table).where(criteria)).mappings().first()
+            )
         if row is None:
             raise NotFoundError
         self.last_pk = values[0] if len(values) == 1 else tuple(values)
@@ -347,7 +564,6 @@ class Table:
     def columns(self) -> list[Column]:
         if not self.exists():
             return []
-        inspector = sa.inspect(self.db.engine)
         pk_names = self._primary_keys()
         pk_positions = {name: index + 1 for index, name in enumerate(pk_names)}
         return [
@@ -359,7 +575,7 @@ class Table:
                 default_value=column.get("default"),
                 is_pk=pk_positions.get(column["name"], 0),
             )
-            for index, column in enumerate(inspector.get_columns(self.name))
+            for index, column in enumerate(self.db.introspect_columns(self.name))
         ]
 
     @property
@@ -367,7 +583,7 @@ class Table:
         if not self.exists():
             return {}
         result = {}
-        for column in sa.inspect(self.db.engine).get_columns(self.name):
+        for column in self.db.introspect_columns(self.name):
             try:
                 python_type = column["type"].python_type
             except NotImplementedError:

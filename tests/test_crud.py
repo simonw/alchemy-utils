@@ -1,6 +1,7 @@
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
-from sqlalchemy_utils import Database, NoTable, NotFoundError, PrimaryKeyRequired
+from sqlalchemy_utils import NoTable, NotFoundError, PrimaryKeyRequired
 
 
 def test_database_table_access(db):
@@ -20,16 +21,12 @@ def test_create_insert_rows_and_get(db):
         not_null={"name"},
     )
 
-    returned = people.insert(
-        {"id": 1, "name": "Ada", "score": 9.5, "active": True}
-    )
+    returned = people.insert({"id": 1, "name": "Ada", "score": 9.5, "active": True})
 
     assert returned is people
     assert people.exists() is True
     assert people.count == 1
-    assert list(people.rows) == [
-        {"id": 1, "name": "Ada", "score": 9.5, "active": True}
-    ]
+    assert list(people.rows) == [{"id": 1, "name": "Ada", "score": 9.5, "active": True}]
     assert people.get(1) == {
         "id": 1,
         "name": "Ada",
@@ -56,7 +53,7 @@ def test_insert_creates_table_from_record(db):
 def test_create_existing_table_options(db):
     db["people"].create({"id": int}, pk="id")
 
-    with pytest.raises(Exception):
+    with pytest.raises(SQLAlchemyError):
         db["people"].create({"id": int}, pk="id")
 
     assert db["people"].create({"id": int}, pk="id", if_not_exists=True)
