@@ -133,7 +133,14 @@ def _parse_json_or_string(value: str) -> Any:
 
 
 def _parse_defaults(values: Sequence[tuple[str, str]]) -> dict[str, Any]:
-    return {name: _parse_json_or_string(value) for name, value in values}
+    parsed = {name: _parse_json_or_string(value) for name, value in values}
+    unsupported = [name for name, value in parsed.items() if isinstance(value, (dict, list))]
+    if unsupported:
+        raise click.ClickException(
+            "Object and array defaults are not portable; unsupported column(s): "
+            + ", ".join(unsupported)
+        )
+    return parsed
 
 
 def _parse_column_pairs(columns: Sequence[str]) -> dict[str, str]:
@@ -625,7 +632,10 @@ def schema(database: str, table_names: tuple[str, ...]) -> None:
 def columns(database: str, table_name: str) -> None:
     """Show normalized column metadata for TABLE."""
     with _database(database) as db:
-        result = _serializable_columns(db[table_name])
+        table = db[table_name]
+        if not table.exists():
+            raise NoTable(f"Table {table_name} does not exist")
+        result = _serializable_columns(table)
     _echo_json(result)
 
 
@@ -636,6 +646,10 @@ def columns(database: str, table_name: str) -> None:
 def indexes(database: str, table_names: tuple[str, ...]) -> None:
     """Show normalized explicit indexes, optionally for selected tables."""
     with _database(database) as db:
+        if table_names:
+            missing = [name for name in table_names if not db[name].exists()]
+            if missing:
+                raise NoTable(f"Table {missing[0]} does not exist")
         names = table_names or tuple(db.table_names())
         result = []
         for name in names:
@@ -652,6 +666,10 @@ def indexes(database: str, table_names: tuple[str, ...]) -> None:
 def foreign_keys(database: str, table_names: tuple[str, ...]) -> None:
     """Show normalized foreign keys, optionally for selected tables."""
     with _database(database) as db:
+        if table_names:
+            missing = [name for name in table_names if not db[name].exists()]
+            if missing:
+                raise NoTable(f"Table {missing[0]} does not exist")
         names = table_names or tuple(db.table_names())
         result = []
         for name in names:

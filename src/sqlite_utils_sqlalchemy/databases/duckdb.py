@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import warnings
 from typing import Any
 
@@ -22,6 +23,8 @@ class DuckDBDatabase(Database):
         self, table: sa.Table, pk_names: list[str], update_names: list[str]
     ) -> Any:
         statement = insert(table)
+        if not update_names:
+            return statement.on_conflict_do_nothing(index_elements=pk_names)
         return statement.on_conflict_do_update(
             index_elements=pk_names,
             set_={name: statement.excluded[name] for name in update_names},
@@ -57,14 +60,16 @@ class DuckDBDatabase(Database):
                 )
             }
 
-    def reflect_table(self, table_name: str) -> sa.Table:
+    def reflect_table(
+        self, table_name: str, *, metadata: sa.MetaData | None = None
+    ) -> sa.Table:
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="duckdb-engine doesn't yet support reflection on indices",
                 module="duckdb_engine",
             )
-            table = super().reflect_table(table_name)
+            table = super().reflect_table(table_name, metadata=metadata)
         # duckdb-engine reflects DuckDB's native JSON as VARCHAR, which skips
         # SQLAlchemy's JSON result decoder. Recover the native catalog type.
         native_types = self._native_types(table_name)
@@ -110,12 +115,48 @@ class DuckDBDatabase(Database):
                 for row in rows
             ]
 
+    def introspect_foreign_keys(self, table_name: str) -> list[dict[str, Any]]:
+        query = sa.text(
+            """
+            select constraint_name, constraint_column_names,
+                   referenced_table, referenced_column_names
+            from duckdb_constraints()
+            where schema_name = :schema and table_name = :table_name
+              and constraint_type = 'FOREIGN KEY'
+            order by constraint_index
+            """
+        )
+        with self.engine.connect() as connection:
+            return [
+                {
+                    "name": row.constraint_name,
+                    "constrained_columns": list(row.constraint_column_names),
+                    "referred_schema": None,
+                    "referred_table": row.referenced_table,
+                    "referred_columns": list(row.referenced_column_names),
+                    "options": {},
+                }
+                for row in connection.execute(
+                    query,
+                    {
+                        "schema": sa.inspect(self.engine).default_schema_name or "main",
+                        "table_name": table_name,
+                    },
+                )
+            ]
+
     @staticmethod
     def _parse_index_expressions(expressions: str) -> list[str]:
         # duckdb_indexes() exposes a rendered list rather than a structured
         # array. This handles ordinary column indexes; expression indexes are
         # intentionally returned as their SQL text.
         value = expressions.strip()
+        try:
+            parsed = ast.literal_eval(value)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+            return [item.strip().strip('"') for item in parsed]
         if value.startswith("[") and value.endswith("]"):
             value = value[1:-1]
         if not value:

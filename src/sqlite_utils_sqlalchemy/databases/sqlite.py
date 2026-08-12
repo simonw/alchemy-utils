@@ -24,6 +24,8 @@ class SQLiteDatabase(Database):
         self, table: sa.Table, pk_names: list[str], update_names: list[str]
     ) -> Any:
         statement = insert(table)
+        if not update_names:
+            return statement.on_conflict_do_nothing(index_elements=pk_names)
         return statement.on_conflict_do_update(
             index_elements=pk_names,
             set_={name: statement.excluded[name] for name in update_names},

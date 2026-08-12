@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy import text
 
 
@@ -59,6 +60,17 @@ def test_foreign_key_introspection(db):
     assert foreign_key.is_compound is False
 
 
+def test_self_referential_foreign_key(db):
+    table = db["nodes"].create(
+        {"id": int, "parent_id": int},
+        pk="id",
+        foreign_keys=(("parent_id", "nodes", "id"),),
+    )
+
+    assert table.foreign_keys[0].columns == ("parent_id",)
+    assert table.foreign_keys[0].other_table == "nodes"
+
+
 def test_compound_foreign_key_introspection(db):
     db["parents"].create({"tenant": str, "number": int}, pk=("tenant", "number"))
     children = db["children"].create(
@@ -86,6 +98,28 @@ def test_explicit_index_introspection(db):
     assert [(index.name, index.unique, index.columns) for index in table.indexes] == [
         ("ix_people_name", 1, ["name"])
     ]
+
+
+def test_index_introspection_preserves_commas_in_identifiers(db):
+    table = db["people"].create({"id": int, "last,name": str}, pk="id")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text('create index "ix_people_last_name" on "people" ("last,name")')
+        )
+
+    assert table.indexes[0].columns == ["last,name"]
+
+
+def test_partial_index_introspection(db):
+    if db.engine.dialect.name == "duckdb":
+        pytest.skip("DuckDB does not support partial indexes")
+    table = db["people"].create({"id": int, "active": bool}, pk="id")
+    with db.engine.begin() as connection:
+        connection.execute(
+            text('create index "ix_people_active" on "people" ("active") where "active"')
+        )
+
+    assert table.indexes[0].partial == 1
 
 
 def test_no_declared_primary_key_is_not_synthesized(db):

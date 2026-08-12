@@ -524,6 +524,9 @@ def test_truncate_and_failed_insert_restores_existing_rows(engine: Engine):
         {"id": 1, "name": "original"}
     ]
 
+    assert_success(invoke("insert", url, "numbers", "-", "--truncate", input="[]"))
+    assert invoke("count", url, "numbers").stdout == "0\n"
+
 
 def test_view_schema_is_view_ddl(engine: Engine):
     url = database_url(engine)
@@ -588,6 +591,17 @@ def test_missing_duckdb_extra_has_an_install_hint(monkeypatch: pytest.MonkeyPatc
     assert result.exit_code == 1
     assert "sqlite-utils-sqlalchemy[duckdb]" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("command", ("columns", "indexes", "foreign-keys"))
+def test_explicit_missing_table_introspection_is_an_error(
+    command: str, tmp_path: Path
+):
+    result = invoke(command, str(tmp_path / "missing.db"), "not_there")
+
+    assert result.exit_code == 1
+    assert "does not exist" in result.stderr
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize(

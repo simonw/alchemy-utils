@@ -60,6 +60,13 @@ def test_insert_conflict_options(db):
         table.insert({"id": 2}, ignore=True, replace=True)
 
 
+def test_primary_key_only_replace_does_nothing_on_conflict(db):
+    table = db["items"].insert({"id": 1}, pk="id")
+
+    assert table.insert({"id": 1}, replace=True) is table
+    assert list(table.rows) == [{"id": 1}]
+
+
 def test_upsert_inserts_and_updates_only_supplied_columns(db):
     table = db["items"].insert({"id": 1, "name": "one", "note": "keep"}, pk="id")
 
@@ -171,6 +178,22 @@ def test_generated_integer_primary_keys_in_bulk(db):
         {"id": 2, "name": "second"},
     ]
     assert table.last_pk is None
+
+
+def test_mixed_mapping_and_list_values_infer_json(db):
+    table = db["events"].insert_all(
+        [
+            {"id": 1, "payload": {"kind": "mapping"}},
+            {"id": 2, "payload": ["list"]},
+        ],
+        pk="id",
+    )
+
+    assert table.columns_dict["payload"] is dict
+    assert list(table.rows) == [
+        {"id": 1, "payload": {"kind": "mapping"}},
+        {"id": 2, "payload": ["list"]},
+    ]
 
 
 def test_reserved_identifiers_are_quoted(db):

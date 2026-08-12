@@ -123,6 +123,8 @@ def _suggest_type(values: Iterable[Any]) -> type[Any]:
         return int
     if types <= {bool, int, float}:
         return float
+    if types <= {dict, list, tuple}:
+        return dict
     if len(types) == 1 and next(iter(types)) in _PYTHON_TYPES:
         return next(iter(types))
     return str
@@ -190,8 +192,12 @@ class Database:
     ) -> Table:
         return self.table(name).create(columns, **kwargs)
 
-    def reflect_table(self, table_name: str) -> sa.Table:
-        return sa.Table(table_name, sa.MetaData(), autoload_with=self.engine)
+    def reflect_table(
+        self, table_name: str, *, metadata: sa.MetaData | None = None
+    ) -> sa.Table:
+        return sa.Table(
+            table_name, metadata or sa.MetaData(), autoload_with=self.engine
+        )
 
     def primary_keys(self, table_name: str) -> list[str]:
         return list(
@@ -428,8 +434,8 @@ class Table:
                 if isinstance(other_columns, str)
                 else list(other_columns)
             )
-            if other_table not in metadata.tables:
-                sa.Table(other_table, metadata, autoload_with=self.db.engine)
+            if other_table != self.name and other_table not in metadata.tables:
+                self.db.reflect_table(other_table, metadata=metadata)
             constraints.append(
                 sa.ForeignKeyConstraint(
                     local_names,
@@ -745,7 +751,11 @@ class Table:
                 unique=int(reflected.get("unique", False)),
                 origin="c",
                 partial=int(
-                    bool((reflected.get("dialect_options") or {}).get("sqlite_where"))
+                    any(
+                        (reflected.get("dialect_options") or {}).get(option)
+                        is not None
+                        for option in ("sqlite_where", "postgresql_where")
+                    )
                 ),
                 columns=list(reflected.get("column_names") or ()),
             )
