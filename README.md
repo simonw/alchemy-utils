@@ -87,10 +87,11 @@ reflection to its `Database` instance.
 
 ## Install
 
-The base package needs SQLAlchemy and works with Python 3.10 or later. Engine
-drivers are extras:
+The base package needs Click and SQLAlchemy and works with Python 3.10 or
+later. Engine drivers are extras:
 
 ```bash
+pip install sqlite-utils-sqlalchemy
 pip install 'sqlite-utils-sqlalchemy[postgresql]'
 pip install 'sqlite-utils-sqlalchemy[duckdb]'
 ```
@@ -111,9 +112,13 @@ sqlite-utils-sqlalchemy create-table data.db people \
 
 # PostgreSQL and DuckDB: SQLAlchemy URLs
 sqlite-utils-sqlalchemy tables \
-  postgresql+psycopg://user:password@localhost/app --json
+  postgresql+psycopg://user@localhost/app --json
 sqlite-utils-sqlalchemy schema duckdb:///analytics.duckdb
 ```
+
+For PostgreSQL credentials, prefer libpq environment variables or a password
+file instead of putting a password in the command-line URL, where it could be
+recorded in shell history.
 
 `insert` and `upsert` each handle either one record or many records, mapping to
 the corresponding single-record or `*_all()` API. The default input is a JSON
@@ -140,9 +145,10 @@ portable shape, `{"$base64": true, "encoded": "AP8="}`.
 Available inspection and read commands are `tables`, `views`, `schema`,
 `columns`, `indexes`, `foreign-keys`, `rows`, `get`, and `count`. Metadata and
 rows use normalized JSON (or JSON lines with `--nl` where offered); schema is
-raw reflected DDL. Mutations are silent on success, as in sqlite-utils. Run any
-command with `--help` for its options. The same interface is also available as
-`python -m sqlite_utils_sqlalchemy`.
+engine-shaped reflected DDL. `tables` and `views` use JSON by default, with
+`--plain` for one name per line. Mutations are silent on success, as in
+sqlite-utils. Run any command with `--help` for its options. The same interface
+is also available as `python -m sqlite_utils_sqlalchemy`.
 
 ## Test
 
