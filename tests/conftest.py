@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, Engine
 from testing.postgresql import Postgresql
 
-from sqlalchemy_utils import Database
+from sqlite_utils_sqlalchemy import Database
 
 
 def _postgres_binary(name: str) -> str | None:

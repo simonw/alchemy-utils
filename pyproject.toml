@@ -1,7 +1,7 @@
 [project]
-name = "sqlalchemy-utils"
+name = "sqlite-utils-sqlalchemy"
 version = "0.1.0"
-description = "Add your description here"
+description = "A research spike for a sqlite-utils-style API backed by SQLAlchemy"
 readme = "README.md"
 authors = [
     { name = "Simon Willison", email = "swillison@gmail.com" }

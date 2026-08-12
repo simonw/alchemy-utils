@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
-from sqlalchemy_utils import NoTable, NotFoundError, PrimaryKeyRequired
+from sqlite_utils_sqlalchemy import NoTable, NotFoundError, PrimaryKeyRequired
 
 
 def test_database_table_access(db):

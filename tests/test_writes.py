@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from sqlalchemy_utils import NotFoundError, PrimaryKeyRequired
+from sqlite_utils_sqlalchemy import NotFoundError, PrimaryKeyRequired
 
 
 def test_insert_all_infers_union_of_columns(db):
@@ -137,9 +137,7 @@ def test_insert_all_is_atomic(db):
 
 
 def test_generated_integer_primary_keys_in_bulk(db):
-    table = db["items"].insert_all(
-        [{"name": "first"}, {"name": "second"}], pk="id"
-    )
+    table = db["items"].insert_all([{"name": "first"}, {"name": "second"}], pk="id")
 
     assert sorted(table.rows, key=lambda row: row["id"]) == [
         {"id": 1, "name": "first"},
