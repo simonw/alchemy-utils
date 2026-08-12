@@ -167,7 +167,68 @@ class Table:
     def _sa_table(self) -> sa.Table:
         if not self.exists():
             raise NoTable(f"Table {self.name} does not exist")
-        return sa.Table(self.name, sa.MetaData(), autoload_with=self.db.engine)
+        table = sa.Table(self.name, sa.MetaData(), autoload_with=self.db.engine)
+        if self.db.engine.dialect.name == "duckdb":
+            # duckdb-engine 0.17 reflects DuckDB's native JSON as VARCHAR,
+            # which skips SQLAlchemy's JSON result decoder. Patch that known
+            # reflection gap using DuckDB's catalog table.
+            with self.db.engine.connect() as connection:
+                native_types = {
+                    row.column_name: row.data_type
+                    for row in connection.execute(
+                        sa.text(
+                            """
+                            select column_name, data_type
+                            from duckdb_columns()
+                            where schema_name = :schema and table_name = :table_name
+                            """
+                        ),
+                        {
+                            "schema": sa.inspect(self.db.engine).default_schema_name
+                            or "main",
+                            "table_name": self.name,
+                        },
+                    )
+                }
+            for column in table.columns:
+                if native_types.get(column.name) == "JSON":
+                    column.type = sa.JSON()
+        return table
+
+    def _primary_keys(self) -> list[str]:
+        inspector = sa.inspect(self.db.engine)
+        reflected = list(
+            inspector.get_pk_constraint(self.name).get("constrained_columns") or []
+        )
+        if reflected or self.db.engine.dialect.name != "duckdb":
+            return reflected
+
+        # duckdb-engine 0.17 does not reflect indexes or primary keys yet.
+        # DuckDB's standard information_schema views preserve compound-key order.
+        query = sa.text(
+            """
+            select kcu.column_name
+            from information_schema.table_constraints tc
+            join information_schema.key_column_usage kcu
+              on tc.constraint_catalog = kcu.constraint_catalog
+             and tc.constraint_schema = kcu.constraint_schema
+             and tc.constraint_name = kcu.constraint_name
+            where tc.table_schema = :schema
+              and tc.table_name = :table_name
+              and tc.constraint_type = 'PRIMARY KEY'
+            order by kcu.ordinal_position
+            """
+        )
+        with self.db.engine.connect() as connection:
+            return list(
+                connection.scalars(
+                    query,
+                    {
+                        "schema": inspector.default_schema_name or "main",
+                        "table_name": self.name,
+                    },
+                )
+            )
 
     def create(
         self,
@@ -287,7 +348,7 @@ class Table:
         if not self.exists():
             return []
         inspector = sa.inspect(self.db.engine)
-        pk_names = inspector.get_pk_constraint(self.name).get("constrained_columns") or []
+        pk_names = self._primary_keys()
         pk_positions = {name: index + 1 for index, name in enumerate(pk_names)}
         return [
             Column(
@@ -318,12 +379,7 @@ class Table:
     def pks(self) -> list[str]:
         if not self.exists():
             return []
-        return list(
-            sa.inspect(self.db.engine)
-            .get_pk_constraint(self.name)
-            .get("constrained_columns")
-            or []
-        )
+        return self._primary_keys()
 
     @property
     def schema(self) -> str:
