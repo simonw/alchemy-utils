@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from sqlite_utils_sqlalchemy import NotFoundError, PrimaryKeyRequired
+from sqlite_utils_sqlalchemy import InvalidColumns, NotFoundError, PrimaryKeyRequired
 
 
 def test_insert_all_infers_union_of_columns(db):
@@ -100,6 +100,33 @@ def test_upsert_validates_primary_key_values(db):
         table.upsert({"name": "missing id"})
     with pytest.raises(PrimaryKeyRequired):
         table.upsert({"id": None, "name": "null id"})
+
+
+def test_empty_upsert_all_still_requires_primary_key(db):
+    table = db["items"]
+
+    with pytest.raises(PrimaryKeyRequired):
+        table.upsert_all([])
+
+    assert table.exists() is False
+
+
+def test_upsert_all_without_primary_key_does_not_create_table(db):
+    table = db["items"]
+
+    with pytest.raises(PrimaryKeyRequired):
+        table.upsert_all([{"name": "one"}])
+
+    assert table.exists() is False
+
+
+def test_unknown_insert_columns_require_alter(db):
+    table = db["items"].create({"id": int, "name": str}, pk="id")
+
+    with pytest.raises(InvalidColumns, match="rating"):
+        table.insert({"id": 1, "name": "one", "rating": 5})
+
+    assert table.count == 0
 
 
 def test_primary_key_only_upsert_does_nothing_on_conflict(db):
