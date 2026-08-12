@@ -120,8 +120,8 @@ INITDB_PATH="$PG_BIN/initdb" \
 uv run pytest
 ```
 
-The current local run covers 100 cases. It was exercised with Python 3.14.3,
-SQLAlchemy 2.0.52, SQLite 3.50.4, PostgreSQL 18.3, DuckDB 1.5.5,
+The current local run covers 100 cases on both Python 3.10 and 3.14.3. It was
+exercised with SQLAlchemy 2.0.52, SQLite 3.50.4, PostgreSQL 18.3, DuckDB 1.5.5,
 duckdb-engine 0.17.0, and psycopg 3.3.4.
 
 ## Deliberate spike limitations
