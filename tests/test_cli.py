@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+import sqlite_utils_sqlalchemy.cli as cli_module
 from click.testing import CliRunner
 from sqlalchemy.engine import Engine
 
@@ -370,10 +371,223 @@ def test_default_tables_output_and_views(tmp_path: Path):
 
     result = invoke("tables", url)
     assert_success(result)
-    assert result.stdout.splitlines() == ["one", "two"]
+    assert json.loads(result.stdout) == [{"table": "one"}, {"table": "two"}]
     result = invoke("views", url)
     assert_success(result)
-    assert result.stdout.splitlines() == ["things"]
+    assert json.loads(result.stdout) == [{"view": "things"}]
+
+    result = invoke("views", url, "--plain")
+    assert_success(result)
+    assert result.stdout == "things\n"
+
+
+def test_pk_values_use_reflected_types(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "releases",
+            "code",
+            "text",
+            "released",
+            "date",
+            "name",
+            "text",
+            "--pk",
+            "code",
+            "--pk",
+            "released",
+        )
+    )
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "releases",
+            "-",
+            input='{"code":"1","released":"2026-08-12","name":"first"}',
+        )
+    )
+
+    key = '["1", "2026-08-12"]'
+    result = invoke("get", url, "releases", key)
+    assert_success(result)
+    assert json.loads(result.stdout)["name"] == "first"
+    assert_success(
+        invoke("update", url, "releases", key, "-", input='{"name":"updated"}')
+    )
+    assert json.loads(invoke("get", url, "releases", key).stdout)["name"] == "updated"
+
+    assert_success(
+        invoke("create-table", url, "labels", "code", "text", "--pk", "code")
+    )
+    assert_success(invoke("insert", url, "labels", "-", input='{"code":"1"}'))
+    result = invoke("get", url, "labels", "1")
+    assert_success(result)
+    assert json.loads(result.stdout) == {"code": "1"}
+
+
+def test_nested_base64_shape_is_preserved_inside_json(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "assets",
+            "id",
+            "integer",
+            "metadata",
+            "json",
+            "content",
+            "blob",
+            "--pk",
+            "id",
+        )
+    )
+    sentinel = {"$base64": True, "encoded": "AP8="}
+    record = {"id": 1, "metadata": {"thumbnail": sentinel}, "content": sentinel}
+    assert_success(invoke("insert", url, "assets", "-", input=json.dumps(record)))
+
+    result = invoke("get", url, "assets", "1")
+    assert_success(result)
+    assert json.loads(result.stdout) == record
+
+
+def test_invalid_typed_values_fail_before_writing(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "measurements",
+            "id",
+            "integer",
+            "amount",
+            "integer",
+            "--pk",
+            "id",
+        )
+    )
+    result = invoke(
+        "insert",
+        url,
+        "measurements",
+        "-",
+        input='{"id": 1, "amount": "not-an-integer"}',
+    )
+
+    assert result.exit_code == 1
+    assert "amount" in result.stderr
+    assert "not-an-integer" in result.stderr
+    assert invoke("count", url, "measurements").stdout == "0\n"
+
+    result = invoke(
+        "insert",
+        url,
+        "measurements",
+        "-",
+        "--type",
+        "amount",
+        "text",
+        input='{"id": 2, "amount": "2"}',
+    )
+    assert result.exit_code == 1
+    assert "--type" in result.stderr
+    assert "existing table" in result.stderr
+
+
+def test_truncate_and_failed_insert_restores_existing_rows(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "numbers",
+            "-",
+            "--pk",
+            "id",
+            input='{"id": 1, "name": "original"}',
+        )
+    )
+    result = invoke(
+        "insert",
+        url,
+        "numbers",
+        "-",
+        "--truncate",
+        input='[{"id": 2, "name": "new"}, {"id": 2, "name": "duplicate"}]',
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(invoke("rows", url, "numbers").stdout) == [
+        {"id": 1, "name": "original"}
+    ]
+
+
+def test_view_schema_is_view_ddl(engine: Engine):
+    url = database_url(engine)
+    assert_success(invoke("create-table", url, "source", "id", "integer"))
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE VIEW visible_source AS SELECT id FROM source")
+
+    result = invoke("views", url, "--schema")
+    assert_success(result)
+    assert "CREATE VIEW" in json.loads(result.stdout)[0]["schema"].upper()
+    result = invoke("schema", url, "visible_source")
+    assert_success(result)
+    assert "CREATE VIEW" in result.stdout.upper()
+
+
+def test_compound_foreign_key_from_cli(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "parents",
+            "organization",
+            "text",
+            "id",
+            "integer",
+            "--pk",
+            "organization",
+            "--pk",
+            "id",
+        )
+    )
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "children",
+            "organization",
+            "text",
+            "parent_id",
+            "integer",
+            "--fk",
+            "organization,parent_id",
+            "parents",
+            "organization,id",
+        )
+    )
+
+    result = invoke("foreign-keys", url, "children")
+    assert_success(result)
+    assert json.loads(result.stdout)[0]["columns"] == ["organization", "parent_id"]
+
+
+def test_missing_duckdb_extra_has_an_install_hint(monkeypatch: pytest.MonkeyPatch):
+    def missing_driver(value):
+        del value
+        raise sa.exc.NoSuchModuleError("Can't load plugin: sqlalchemy.dialects:duckdb")
+
+    monkeypatch.setattr(cli_module, "Database", missing_driver)
+    result = invoke("tables", "duckdb:///missing.duckdb")
+
+    assert result.exit_code == 1
+    assert "sqlite-utils-sqlalchemy[duckdb]" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 @pytest.mark.parametrize(
