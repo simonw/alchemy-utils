@@ -52,7 +52,7 @@ def _database_target(value: str) -> str | pathlib.Path:
 def _database(value: str):
     try:
         database = Database(_database_target(value))
-    except ModuleNotFoundError as ex:
+    except (ModuleNotFoundError, sa.exc.NoSuchModuleError) as ex:
         dialect = value.split(":", 1)[0].split("+", 1)[0]
         extra = {"duckdb": "duckdb", "postgresql": "postgresql"}.get(dialect)
         if extra:
@@ -60,7 +60,10 @@ def _database(value: str):
                 f"The {dialect} driver is not installed; install "
                 f"sqlite-utils-sqlalchemy[{extra}]"
             ) from ex
-        raise click.ClickException(f"Database driver is not installed: {ex.name}") from ex
+        missing_name = getattr(ex, "name", None) or str(ex)
+        raise click.ClickException(
+            f"Database driver is not installed: {missing_name}"
+        ) from ex
     try:
         yield database
     finally:
@@ -168,22 +171,22 @@ def _selected_input_format(
 def _verify_record(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise click.ClickException("Each input record must be a JSON object")
-    return {name: _decode_json_value(item) for name, item in value.items()}
+    return {name: _decode_binary_value(item) for name, item in value.items()}
 
 
-def _decode_json_value(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        if value.get("$base64") is True and "encoded" in value:
-            encoded = value["encoded"]
-            if not isinstance(encoded, str):
-                raise click.ClickException("Base64 encoded values must be strings")
-            try:
-                return base64.b64decode(encoded, validate=True)
-            except (binascii.Error, ValueError) as ex:
-                raise click.ClickException("Invalid base64 encoded value") from ex
-        return {name: _decode_json_value(item) for name, item in value.items()}
-    if isinstance(value, list):
-        return [_decode_json_value(item) for item in value]
+def _decode_binary_value(value: Any) -> Any:
+    if (
+        isinstance(value, Mapping)
+        and value.get("$base64") is True
+        and "encoded" in value
+    ):
+        encoded = value["encoded"]
+        if not isinstance(encoded, str):
+            raise click.ClickException("Base64 encoded values must be strings")
+        try:
+            return base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as ex:
+            raise click.ClickException("Invalid base64 encoded value") from ex
     return value
 
 
@@ -216,36 +219,48 @@ def _read_records(
         return [dict(row) for row in reader], False
 
 
-def _coerce_value(value: Any, python_type: type[Any]) -> Any:
+def _coerce_value(
+    value: Any, python_type: type[Any], *, column_name: str, strict: bool
+) -> Any:
     if value is None or not isinstance(value, str) or python_type is str:
         return value
     if value == "":
         return None
     try:
+        converted: Any
         if python_type is bool:
             lowered = value.lower()
             if lowered in ("true", "1"):
-                return True
-            if lowered in ("false", "0"):
-                return False
+                converted = True
+            elif lowered in ("false", "0"):
+                converted = False
+            else:
+                raise ValueError("not a boolean")
+        elif python_type is int:
+            converted = int(value)
+        elif python_type is float:
+            converted = float(value)
+        elif python_type is decimal.Decimal:
+            converted = decimal.Decimal(value)
+        elif python_type in (dict, list):
+            converted = json.loads(value)
+        elif python_type is datetime.datetime:
+            converted = datetime.datetime.fromisoformat(value)
+        elif python_type is datetime.date:
+            converted = datetime.date.fromisoformat(value)
+        elif python_type is datetime.time:
+            converted = datetime.time.fromisoformat(value)
+        elif python_type is uuid.UUID:
+            converted = uuid.UUID(value)
+        else:
             return value
-        if python_type is int:
-            return int(value)
-        if python_type is float:
-            return float(value)
-        if python_type is decimal.Decimal:
-            return decimal.Decimal(value)
-        if python_type in (dict, list):
-            return json.loads(value)
-        if python_type is datetime.date:
-            return datetime.date.fromisoformat(value)
-        if python_type is datetime.datetime:
-            return datetime.datetime.fromisoformat(value)
-        if python_type is datetime.time:
-            return datetime.time.fromisoformat(value)
-        if python_type is uuid.UUID:
-            return uuid.UUID(value)
-    except (ValueError, TypeError, json.JSONDecodeError):
+        return converted
+    except (ValueError, TypeError, json.JSONDecodeError, decimal.DecimalException) as ex:
+        if strict:
+            raise click.ClickException(
+                f"Could not convert column {column_name!r} value {value!r} "
+                f"to {python_type.__name__}"
+            ) from ex
         return value
     return value
 
@@ -268,6 +283,8 @@ def _coerce_records(
     records: list[dict[str, Any]],
     reflected_types: Mapping[str, type[Any]],
     explicit_types: Mapping[str, str],
+    *,
+    strict: bool,
 ) -> list[dict[str, Any]]:
     types = dict(reflected_types)
     types.update(
@@ -275,7 +292,9 @@ def _coerce_records(
     )
     return [
         {
-            name: _coerce_value(value, types.get(name, str))
+            name: _coerce_value(
+                value, types.get(name, str), column_name=name, strict=strict
+            )
             for name, value in record.items()
         }
         for record in records
@@ -292,6 +311,53 @@ def _serializable_indexes(table: Any) -> list[dict[str, Any]]:
 
 def _serializable_foreign_keys(table: Any) -> list[dict[str, Any]]:
     return [asdict(foreign_key) for foreign_key in table.foreign_keys]
+
+
+def _foreign_key_specs(
+    values: Sequence[tuple[str, str, str]],
+) -> list[tuple[str | list[str], str, str | list[str]]]:
+    result = []
+    for local, other_table, remote in values:
+        local_names = [item.strip() for item in local.split(",")]
+        remote_names = [item.strip() for item in remote.split(",")]
+        if not all(local_names + remote_names) or len(local_names) != len(remote_names):
+            raise click.ClickException(
+                "--fk local and remote column lists must have the same length"
+            )
+        result.append(
+            (
+                local_names[0] if len(local_names) == 1 else local_names,
+                other_table,
+                remote_names[0] if len(remote_names) == 1 else remote_names,
+            )
+        )
+    return result
+
+
+def _primary_key_value(table: Any, value: str) -> Any:
+    parsed = _parse_json_or_string(value)
+    names = table.pks
+    if not names:
+        raise PrimaryKeyRequired(f"Table {table.name} has no primary key")
+    if len(names) == 1 and table.columns_dict.get(names[0]) is str:
+        values = [value]
+    else:
+        values = list(parsed) if isinstance(parsed, list) else [parsed]
+    if len(values) != len(names):
+        raise click.ClickException(
+            f"Primary key for {table.name} needs {len(names)} value(s)"
+        )
+    column_types = table.columns_dict
+    converted = [
+        _coerce_value(
+            item,
+            column_types.get(name, str),
+            column_name=name,
+            strict=True,
+        )
+        for name, item in zip(names, values)
+    ]
+    return converted[0] if len(converted) == 1 else converted
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -343,7 +409,7 @@ def create_table(
             pk=pk,
             not_null=not_null,
             defaults=_parse_defaults(defaults),
-            foreign_keys=foreign_keys,
+            foreign_keys=_foreign_key_specs(foreign_keys),
             ignore=ignore,
             replace=replace,
         )
@@ -397,8 +463,15 @@ def _perform_write(
         pk = pks
     with _database(database) as db:
         table = db[table_name]
+        if table.exists() and type_overrides:
+            raise click.ClickException("--type cannot be used with an existing table")
         reflected_types = table.columns_dict if table.exists() else {}
-        records = _coerce_records(records, reflected_types, type_overrides)
+        records = _coerce_records(
+            records,
+            reflected_types,
+            type_overrides,
+            strict=table.exists() or bool(type_overrides),
+        )
         kwargs = {
             "pk": pk,
             "alter": alter,
@@ -456,8 +529,10 @@ def update(
         raise click.ClickException("update input must be one JSON object")
     with _database(database) as db:
         table = db[table_name]
-        updates = _coerce_records(records, table.columns_dict, {})[0]
-        table.update(_parse_json_or_string(pk_value), updates, alter=alter)
+        updates = _coerce_records(
+            records, table.columns_dict, {}, strict=table.exists()
+        )[0]
+        table.update(_primary_key_value(table, pk_value), updates, alter=alter)
 
 
 def _table_listing(
@@ -469,6 +544,7 @@ def _table_listing(
     counts: bool,
     columns: bool,
     schema: bool,
+    plain: bool,
 ) -> None:
     with _database(database) as db:
         names = db.view_names() if views else db.table_names()
@@ -482,9 +558,11 @@ def _table_listing(
             if columns:
                 item["columns"] = [column.name for column in table.columns]
             if schema:
-                item["schema"] = table.schema
+                item["schema"] = (
+                    db.view_schema(name) if views else table.schema
+                )
             result.append(item)
-    if not any((json_output, nl, counts, columns, schema)):
+    if plain:
         for name in names:
             click.echo(name)
     else:
@@ -496,6 +574,7 @@ def _listing_options(function: F) -> F:
         click.argument("database"),
         click.option("json_output", "--json", is_flag=True, help="Output a JSON array."),
         click.option("--nl", is_flag=True, help="Output newline-delimited JSON."),
+        click.option("--plain", is_flag=True, help="Output one name per line."),
         click.option("--counts", is_flag=True, help="Include a row count."),
         click.option("--columns", is_flag=True, help="Include column names."),
         click.option("--schema", is_flag=True, help="Include reflected DDL."),
@@ -528,7 +607,14 @@ def views(**kwargs: Any) -> None:
 def schema(database: str, table_names: tuple[str, ...]) -> None:
     """Show reflected DDL for DATABASE or selected tables."""
     with _database(database) as db:
-        value = "\n".join(db[name].schema for name in table_names) if table_names else db.schema
+        if table_names:
+            views = set(db.view_names())
+            value = "\n".join(
+                db.view_schema(name) if name in views else db[name].schema
+                for name in table_names
+            )
+        else:
+            value = db.schema
     click.echo(value)
 
 
@@ -593,7 +679,8 @@ def rows(database: str, table_name: str, nl: bool) -> None:
 def get(database: str, table_name: str, pk_value: str) -> None:
     """Output one row selected by PK_VALUE as JSON."""
     with _database(database) as db:
-        result = db[table_name].get(_parse_json_or_string(pk_value))
+        table = db[table_name]
+        result = table.get(_primary_key_value(table, pk_value))
     _echo_json(result)
 
 

@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
-import sqlite_utils_sqlalchemy.cli as cli_module
 from click.testing import CliRunner
 from sqlalchemy.engine import Engine
 
+import sqlite_utils_sqlalchemy.cli as cli_module
 from sqlite_utils_sqlalchemy import Database
 from sqlite_utils_sqlalchemy.cli import cli
 

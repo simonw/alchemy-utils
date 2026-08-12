@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import sqlalchemy as sa
@@ -57,7 +58,13 @@ class DuckDBDatabase(Database):
             }
 
     def reflect_table(self, table_name: str) -> sa.Table:
-        table = super().reflect_table(table_name)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="duckdb-engine doesn't yet support reflection on indices",
+                module="duckdb_engine",
+            )
+            table = super().reflect_table(table_name)
         # duckdb-engine reflects DuckDB's native JSON as VARCHAR, which skips
         # SQLAlchemy's JSON result decoder. Recover the native catalog type.
         native_types = self._native_types(table_name)

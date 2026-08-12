@@ -214,6 +214,13 @@ class Database:
         table = self.reflect_table(table_name)
         return str(CreateTable(table).compile(self.engine)).strip()
 
+    def view_schema(self, view_name: str) -> str:
+        definition = sa.inspect(self.engine).get_view_definition(view_name)
+        if definition is None:
+            raise NoTable(f"View {view_name} does not exist")
+        preparer = self.engine.dialect.identifier_preparer
+        return f"CREATE VIEW {preparer.quote(view_name)} AS {definition}".strip()
+
     def drop_table(self, table_name: str) -> None:
         self.reflect_table(table_name).drop(self.engine)
 
@@ -282,7 +289,9 @@ class Database:
 
     @property
     def schema(self) -> str:
-        return "\n".join(f"{self.table_schema(name)};" for name in self.table_names())
+        definitions = [self.table_schema(name) for name in self.table_names()]
+        definitions.extend(self.view_schema(name) for name in self.view_names())
+        return "\n".join(f"{definition};" for definition in definitions)
 
 
 class Table:
@@ -464,6 +473,10 @@ class Table:
         if upsert and not upsert_pk_names:
             raise PrimaryKeyRequired("upsert() requires a pk")
         if not records_list:
+            if truncate and self.exists():
+                table = self._sa_table()
+                with self.db.engine.begin() as connection:
+                    connection.execute(sa.delete(table))
             return self
 
         if not self.exists():
@@ -500,10 +513,6 @@ class Table:
                 if name not in record:
                     normalized_record.pop(name, None)
 
-        if truncate:
-            with self.db.engine.begin() as connection:
-                connection.execute(sa.delete(table))
-
         if upsert:
             pk_names = upsert_pk_names
             for record in records_list:
@@ -512,6 +521,8 @@ class Table:
                         "upsert() requires values for every pk column"
                     )
             with self.db.engine.begin() as connection:
+                if truncate:
+                    connection.execute(sa.delete(table))
                 for record in normalized:
                     update_names = [name for name in record if name not in pk_names]
                     statement = self.db.upsert_statement(table, pk_names, update_names)
@@ -537,6 +548,8 @@ class Table:
                 and not ignore
             )
             with self.db.engine.begin() as connection:
+                if truncate:
+                    connection.execute(sa.delete(table))
                 if single_generated_pk:
                     result = connection.execute(
                         statement.returning(*(table.c[name] for name in self.pks)),
