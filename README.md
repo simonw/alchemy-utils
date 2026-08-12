@@ -1,8 +1,13 @@
 # alchemy-utils
 
+[![PyPI](https://img.shields.io/pypi/v/alchemy-utils.svg)](https://pypi.org/project/alchemy-utils/)
+[![Tests](https://github.com/simonw/alchemy-utils/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/alchemy-utils/actions/workflows/test.yml)
+[![Changelog](https://img.shields.io/github/v/release/simonw/alchemy-utils?include_prereleases&label=changelog)](https://github.com/simonw/alchemy-utils/releases)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/alchemy-utils/blob/main/LICENSE)
+
 An executable research spike for a subset of the
 [`sqlite-utils`](https://sqlite-utils.datasette.io/) Python API backed by
-SQLAlchemy Core.
+SQLAlchemy Core, built [using GPT-5.6 Sol Ultra and Codex](https://gist.github.com/simonw/bd10e4886688e0fd1b833e4afaabf19e).
 
 It demonstrates the same style of table-first API across SQLite, PostgreSQL,
 and DuckDB:
