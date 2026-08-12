@@ -1,14 +1,6 @@
 import pytest
-from sqlalchemy import create_engine
 
 from sqlalchemy_utils import Database, NoTable, NotFoundError, PrimaryKeyRequired
-
-
-@pytest.fixture
-def db():
-    database = Database(create_engine("sqlite+pysqlite:///:memory:"))
-    yield database
-    database.close()
 
 
 def test_database_table_access(db):
