@@ -120,7 +120,7 @@ INITDB_PATH="$PG_BIN/initdb" \
 uv run pytest
 ```
 
-The current local run covers 91 cases. It was exercised with Python 3.14.3,
+The current local run covers 100 cases. It was exercised with Python 3.14.3,
 SQLAlchemy 2.0.52, SQLite 3.50.4, PostgreSQL 18.3, DuckDB 1.5.5,
 duckdb-engine 0.17.0, and psycopg 3.3.4.
 
@@ -139,5 +139,7 @@ duckdb-engine 0.17.0, and psycopg 3.3.4.
   key shape, and explicit indexes.
 - A hidden `rowid` is never synthesized as a primary key. `use_rowid` reports
   the SQLite capability, while `pks` returns only declared keys on every engine.
+- Mixing explicit integer primary keys with later generated keys may require
+  synchronizing the PostgreSQL or DuckDB sequence; this spike does not do that.
 - DuckDB expression-index parsing is intentionally best-effort; ordinary
   column indexes are covered.
