@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import csv as csv_stdlib
 import datetime
 import decimal
@@ -167,7 +168,23 @@ def _selected_input_format(
 def _verify_record(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise click.ClickException("Each input record must be a JSON object")
-    return dict(value)
+    return {name: _decode_json_value(item) for name, item in value.items()}
+
+
+def _decode_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if value.get("$base64") is True and "encoded" in value:
+            encoded = value["encoded"]
+            if not isinstance(encoded, str):
+                raise click.ClickException("Base64 encoded values must be strings")
+            try:
+                return base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError) as ex:
+                raise click.ClickException("Invalid base64 encoded value") from ex
+        return {name: _decode_json_value(item) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_json_value(item) for item in value]
+    return value
 
 
 def _read_records(
@@ -278,6 +295,7 @@ def _serializable_foreign_keys(table: Any) -> list[dict[str, Any]]:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option(package_name="sqlite-utils-sqlalchemy")
 def cli() -> None:
     """Use a sqlite-utils-style API with SQLite, PostgreSQL, or DuckDB."""
 

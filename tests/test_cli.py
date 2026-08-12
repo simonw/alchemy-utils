@@ -219,6 +219,140 @@ def test_create_table_options_and_introspection(engine: Engine):
     assert "FOREIGN KEY" in result.stdout.upper()
 
 
+def test_compound_keys_nested_json_and_binary_round_trip(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "memberships",
+            "organization",
+            "text",
+            "member_id",
+            "integer",
+            "profile",
+            "json",
+            "avatar",
+            "blob",
+            "--pk",
+            "organization",
+            "--pk",
+            "member_id",
+        )
+    )
+    record = {
+        "organization": "acme",
+        "member_id": 7,
+        "profile": {"roles": ["admin"], "active": True},
+        "avatar": {"$base64": True, "encoded": "AP8="},
+    }
+    assert_success(invoke("insert", url, "memberships", "-", input=json.dumps(record)))
+    assert_success(
+        invoke(
+            "upsert",
+            url,
+            "memberships",
+            "-",
+            input='{"organization":"acme","member_id":7,"profile":{"roles":["owner"]}}',
+        )
+    )
+
+    result = invoke("get", url, "memberships", '["acme", 7]')
+    assert_success(result)
+    assert json.loads(result.stdout) == {
+        "organization": "acme",
+        "member_id": 7,
+        "profile": {"roles": ["owner"]},
+        "avatar": {"$base64": True, "encoded": "AP8="},
+    }
+
+
+def test_insert_conflict_modes_truncate_and_count(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "items",
+            "-",
+            "--pk",
+            "id",
+            input='{"id": 1, "name": "first", "note": "keep"}',
+        )
+    )
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "items",
+            "-",
+            "--ignore",
+            input='{"id": 1, "name": "ignored"}',
+        )
+    )
+    assert json.loads(invoke("get", url, "items", "1").stdout)["name"] == "first"
+
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "items",
+            "-",
+            "--replace",
+            input='{"id": 1, "name": "replacement"}',
+        )
+    )
+    assert json.loads(invoke("get", url, "items", "1").stdout) == {
+        "id": 1,
+        "name": "replacement",
+        "note": None,
+    }
+
+    assert_success(
+        invoke(
+            "insert",
+            url,
+            "items",
+            "-",
+            "--truncate",
+            input='[{"id": 2, "name": "only"}]',
+        )
+    )
+    result = invoke("count", url, "items")
+    assert_success(result)
+    assert result.stdout == "1\n"
+    assert json.loads(invoke("rows", url, "items").stdout) == [
+        {"id": 2, "name": "only", "note": None}
+    ]
+
+
+def test_bulk_failure_does_not_insert_partial_records(engine: Engine):
+    url = database_url(engine)
+    assert_success(
+        invoke(
+            "create-table",
+            url,
+            "numbers",
+            "id",
+            "integer",
+            "--pk",
+            "id",
+        )
+    )
+    result = invoke(
+        "insert",
+        url,
+        "numbers",
+        "-",
+        input='[{"id": 1}, {"id": 1}]',
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+    assert invoke("count", url, "numbers").stdout == "0\n"
+
+
 def test_default_tables_output_and_views(tmp_path: Path):
     path = tmp_path / "database with spaces.db"
     url = str(path)
