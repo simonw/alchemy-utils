@@ -98,6 +98,52 @@ pip install 'sqlite-utils-sqlalchemy[duckdb]'
 For this checkout, `uv sync` installs the development group, including both
 drivers and the test tools.
 
+## Command-line interface
+
+Installing the package adds a collision-safe `sqlite-utils-sqlalchemy` command.
+It follows the relevant sqlite-utils command shapes, but its `DATABASE`
+argument can be either a SQLite filename or any installed SQLAlchemy URL:
+
+```bash
+# SQLite: a bare path
+sqlite-utils-sqlalchemy create-table data.db people \
+  id integer name text profile json --pk id --not-null name
+
+# PostgreSQL and DuckDB: SQLAlchemy URLs
+sqlite-utils-sqlalchemy tables \
+  postgresql+psycopg://user:password@localhost/app --json
+sqlite-utils-sqlalchemy schema duckdb:///analytics.duckdb
+```
+
+`insert` and `upsert` each handle either one record or many records, mapping to
+the corresponding single-record or `*_all()` API. The default input is a JSON
+object or array. Use `--nl`, `--csv`, or `--tsv` for other formats; `-` reads
+standard input, and those formats are also detected from file extensions.
+
+```bash
+echo '{"id": 1, "name": "Ada"}' \
+  | sqlite-utils-sqlalchemy insert data.db people -
+
+printf '%s\n' \
+  '{"id": 1, "name": "Ada Lovelace"}' \
+  '{"id": 2, "name": "Grace Hopper"}' \
+  | sqlite-utils-sqlalchemy upsert data.db people - --nl
+
+echo '{"name": "Amazing Grace", "active": true}' \
+  | sqlite-utils-sqlalchemy update data.db people 2 - --alter
+```
+
+Repeat `--pk` for compound keys. `get` and `update` accept a JSON array for a
+compound key, for example `'["acme", 7]'`. Binary JSON values use sqlite-utils'
+portable shape, `{"$base64": true, "encoded": "AP8="}`.
+
+Available inspection and read commands are `tables`, `views`, `schema`,
+`columns`, `indexes`, `foreign-keys`, `rows`, `get`, and `count`. Metadata and
+rows use normalized JSON (or JSON lines with `--nl` where offered); schema is
+raw reflected DDL. Mutations are silent on success, as in sqlite-utils. Run any
+command with `--help` for its options. The same interface is also available as
+`python -m sqlite_utils_sqlalchemy`.
+
 ## Test
 
 ```bash
@@ -120,9 +166,9 @@ INITDB_PATH="$PG_BIN/initdb" \
 uv run pytest
 ```
 
-The current local run covers 100 cases on both Python 3.10 and 3.14.3. It was
-exercised with SQLAlchemy 2.0.52, SQLite 3.50.4, PostgreSQL 18.3, DuckDB 1.5.5,
-duckdb-engine 0.17.0, and psycopg 3.3.4.
+The library and CLI suites run on all three engines and have been exercised on
+both Python 3.10 and 3.14.3, with SQLAlchemy 2.0.52, SQLite 3.50.4, PostgreSQL
+18.3, DuckDB 1.5.5, duckdb-engine 0.17.0, and psycopg 3.3.4.
 
 ## Deliberate spike limitations
 

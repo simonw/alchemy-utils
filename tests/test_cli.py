@@ -48,6 +48,13 @@ def test_help_lists_the_portable_commands():
         assert command in result.stdout
 
 
+def test_version():
+    result = invoke("--version")
+
+    assert_success(result)
+    assert result.stdout == "sqlite-utils-sqlalchemy, version 0.1.0\n"
+
+
 def test_create_insert_upsert_update_and_read(engine: Engine):
     url = database_url(engine)
 

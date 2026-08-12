@@ -17,6 +17,12 @@ The prototype proves the requested surface on SQLite, PostgreSQL, and DuckDB:
 - single-record `last_pk`, mapping/JSON round trips, conflict options,
   identifier quoting, ordered duplicate upserts, and atomic bulk writes.
 
+The installed `sqlite-utils-sqlalchemy` command exercises that same portable
+surface against filenames or SQLAlchemy URLs. It covers create, JSON/JSONL/CSV/
+TSV insert and upsert, primary-key update, row reads, and normalized table,
+column, foreign-key, index, and schema introspection. Mutations retain the
+silent-success convention of the sqlite-utils CLI.
+
 The architecture should not attempt to make SQLAlchemy itself disappear. The
 portable contract needs to be explicitly defined where sqlite-utils currently
 exposes SQLite-specific behavior.

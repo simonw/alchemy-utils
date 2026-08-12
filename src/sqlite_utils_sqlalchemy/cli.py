@@ -295,7 +295,9 @@ def _serializable_foreign_keys(table: Any) -> list[dict[str, Any]]:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.version_option(package_name="sqlite-utils-sqlalchemy")
+@click.version_option(
+    package_name="sqlite-utils-sqlalchemy", prog_name="sqlite-utils-sqlalchemy"
+)
 def cli() -> None:
     """Use a sqlite-utils-style API with SQLite, PostgreSQL, or DuckDB."""
 
