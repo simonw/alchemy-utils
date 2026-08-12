@@ -2,6 +2,8 @@ from .databases import DuckDBDatabase, PostgreSQLDatabase, SQLiteDatabase
 from .db import (
     Column,
     Database,
+    ForeignKey,
+    Index,
     NoTable,
     NotFoundError,
     PrimaryKeyRequired,
@@ -12,6 +14,8 @@ __all__ = [
     "Column",
     "Database",
     "DuckDBDatabase",
+    "ForeignKey",
+    "Index",
     "NoTable",
     "NotFoundError",
     "PostgreSQLDatabase",

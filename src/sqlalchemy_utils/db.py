@@ -6,10 +6,11 @@ import itertools
 import pathlib
 import uuid
 from collections.abc import Generator, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple, Self
 
 import sqlalchemy as sa
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.schema import CreateTable
 
 
@@ -34,6 +35,32 @@ class Column(NamedTuple):
     notnull: int
     default_value: Any
     is_pk: int
+
+
+@dataclass(order=True, frozen=True)
+class ForeignKey:
+    """A reflected single- or multi-column foreign key."""
+
+    table: str
+    column: str | None = field(compare=False)
+    other_table: str
+    other_column: str | None = field(compare=False)
+    columns: tuple[str, ...] = ()
+    other_columns: tuple[str, ...] = ()
+    is_compound: bool = False
+    on_delete: str = "NO ACTION"
+    on_update: str = "NO ACTION"
+
+
+class Index(NamedTuple):
+    """Compatibility-shaped description of an explicit secondary index."""
+
+    seq: int
+    name: str
+    unique: int
+    origin: str
+    partial: int
+    columns: list[str]
 
 
 _PYTHON_TYPES: dict[Any, type[sa.types.TypeEngine[Any]]] = {
@@ -99,7 +126,7 @@ def _suggest_type(values: Iterable[Any]) -> type[Any]:
 class Database:
     """Small sqlite-utils-shaped wrapper around a SQLAlchemy engine."""
 
-    def __new__(cls, engine_or_url: Engine | str | pathlib.Path) -> Self:
+    def __new__(cls, engine_or_url: Engine | URL | str | pathlib.Path) -> Self:
         if cls is Database:
             engine = cls._coerce_engine(engine_or_url)
             # Lazy imports avoid a cycle: dialect subclasses inherit this class.
@@ -117,7 +144,7 @@ class Database:
             return instance
         return super().__new__(cls)
 
-    def __init__(self, engine_or_url: Engine | str | pathlib.Path):
+    def __init__(self, engine_or_url: Engine | URL | str | pathlib.Path):
         if hasattr(self, "_factory_engine"):
             self.engine = self._factory_engine
             del self._factory_engine
@@ -125,9 +152,11 @@ class Database:
             self.engine = self._coerce_engine(engine_or_url)
 
     @staticmethod
-    def _coerce_engine(engine_or_url: Engine | str | pathlib.Path) -> Engine:
+    def _coerce_engine(engine_or_url: Engine | URL | str | pathlib.Path) -> Engine:
         if isinstance(engine_or_url, Engine):
             return engine_or_url
+        if isinstance(engine_or_url, URL):
+            return sa.create_engine(engine_or_url)
         value = str(engine_or_url)
         if "://" not in value:
             value = f"sqlite+pysqlite:///{value}"
@@ -169,6 +198,22 @@ class Database:
 
     def introspect_columns(self, table_name: str) -> list[dict[str, Any]]:
         return sa.inspect(self.engine).get_columns(table_name)
+
+    def introspect_foreign_keys(self, table_name: str) -> list[dict[str, Any]]:
+        return sa.inspect(self.engine).get_foreign_keys(table_name)
+
+    def introspect_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        return sa.inspect(self.engine).get_indexes(table_name)
+
+    def table_schema(self, table_name: str) -> str:
+        table = self.reflect_table(table_name)
+        return str(CreateTable(table).compile(self.engine)).strip()
+
+    def drop_table(self, table_name: str) -> None:
+        self.reflect_table(table_name).drop(self.engine)
+
+    def supports_rowid(self) -> bool:
+        return False
 
     def insert_statement(self, table: sa.Table) -> Any:
         raise NotImplementedError(
@@ -229,6 +274,10 @@ class Database:
     @property
     def tables(self) -> list[Table]:
         return [self.table(name) for name in self.table_names()]
+
+    @property
+    def schema(self) -> str:
+        return "\n".join(f"{self.table_schema(name)};" for name in self.table_names())
 
 
 class Table:
@@ -296,14 +345,14 @@ class Table:
         ignore: bool = False,
         **unsupported: Any,
     ) -> Self:
-        del foreign_keys, unsupported
+        del unsupported
         if not columns:
             raise ValueError("Tables must have at least one column")
         if pk is None:
             pk = self._defaults.get("pk")
         if self.exists():
             if replace:
-                self._sa_table().drop(self.db.engine)
+                self.db.drop_table(self.name)
             elif if_not_exists or ignore:
                 return self
 
@@ -347,6 +396,32 @@ class Table:
         constraints: list[sa.PrimaryKeyConstraint] = []
         if len(pk_names) > 1:
             constraints.append(sa.PrimaryKeyConstraint(*pk_names))
+        for foreign_key in foreign_keys or ():
+            if len(foreign_key) == 2:
+                local_columns, other_table = foreign_key
+                other_columns = local_columns
+            elif len(foreign_key) == 3:
+                local_columns, other_table, other_columns = foreign_key
+            else:
+                raise ValueError(f"Invalid foreign key: {foreign_key!r}")
+            local_names = (
+                [local_columns]
+                if isinstance(local_columns, str)
+                else list(local_columns)
+            )
+            other_names = (
+                [other_columns]
+                if isinstance(other_columns, str)
+                else list(other_columns)
+            )
+            if other_table not in metadata.tables:
+                sa.Table(other_table, metadata, autoload_with=self.db.engine)
+            constraints.append(
+                sa.ForeignKeyConstraint(
+                    local_names,
+                    [f"{other_table}.{name}" for name in other_names],
+                )
+            )
         table = sa.Table(self.name, metadata, *sa_columns, *constraints)
         table.create(self.db.engine, checkfirst=if_not_exists or ignore)
         self._defaults["pk"] = pk
@@ -598,6 +673,60 @@ class Table:
         return self._primary_keys()
 
     @property
+    def use_rowid(self) -> bool:
+        return not self.pks and self.db.supports_rowid()
+
+    @property
+    def default_values(self) -> dict[str, Any]:
+        return {
+            column.name: column.default_value
+            for column in self.columns
+            if column.default_value is not None
+        }
+
+    @property
+    def foreign_keys(self) -> list[ForeignKey]:
+        if not self.exists():
+            return []
+        result = []
+        for reflected in self.db.introspect_foreign_keys(self.name):
+            columns = tuple(reflected.get("constrained_columns") or ())
+            other_columns = tuple(reflected.get("referred_columns") or ())
+            compound = len(columns) > 1
+            options = reflected.get("options") or {}
+            result.append(
+                ForeignKey(
+                    table=self.name,
+                    column=None if compound else columns[0],
+                    other_table=reflected["referred_table"],
+                    other_column=None if compound else other_columns[0],
+                    columns=columns,
+                    other_columns=other_columns,
+                    is_compound=compound,
+                    on_delete=options.get("ondelete", "NO ACTION"),
+                    on_update=options.get("onupdate", "NO ACTION"),
+                )
+            )
+        return result
+
+    @property
+    def indexes(self) -> list[Index]:
+        if not self.exists():
+            return []
+        return [
+            Index(
+                seq=sequence,
+                name=reflected["name"],
+                unique=int(reflected.get("unique", False)),
+                origin="c",
+                partial=int(
+                    bool((reflected.get("dialect_options") or {}).get("sqlite_where"))
+                ),
+                columns=list(reflected.get("column_names") or ()),
+            )
+            for sequence, reflected in enumerate(self.db.introspect_indexes(self.name))
+        ]
+
+    @property
     def schema(self) -> str:
-        table = self._sa_table()
-        return str(CreateTable(table).compile(self.db.engine)).strip()
+        return self.db.table_schema(self.name)

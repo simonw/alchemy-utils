@@ -14,6 +14,9 @@ class SQLiteDatabase(Database):
     def insert_statement(self, table: sa.Table) -> Any:
         return insert(table)
 
+    def supports_rowid(self) -> bool:
+        return True
+
     def insert_ignore_statement(self, table: sa.Table) -> Any:
         return insert(table).on_conflict_do_nothing()
 

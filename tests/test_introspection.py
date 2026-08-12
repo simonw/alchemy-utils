@@ -29,7 +29,9 @@ def test_columns_primary_keys_and_defaults(db):
         "label",
     ]
     assert [column.is_pk for column in table.columns] == [2, 1, 0, 0]
-    assert next(column for column in table.columns if column.name == "label").notnull == 1
+    assert (
+        next(column for column in table.columns if column.name == "label").notnull == 1
+    )
     assert table.pks == ["scope", "part"]
     assert table.columns_dict["payload"] is dict
     assert table.columns_dict["part"] is int
@@ -77,7 +79,9 @@ def test_compound_foreign_key_introspection(db):
 def test_explicit_index_introspection(db):
     table = db["people"].create({"id": int, "name": str}, pk="id")
     with db.engine.begin() as connection:
-        connection.execute(text('create unique index "ix_people_name" on "people" ("name")'))
+        connection.execute(
+            text('create unique index "ix_people_name" on "people" ("name")')
+        )
 
     assert [(index.name, index.unique, index.columns) for index in table.indexes] == [
         ("ix_people_name", 1, ["name"])

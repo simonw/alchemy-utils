@@ -74,6 +74,64 @@ class DuckDBDatabase(Database):
                 column["type"] = sa.JSON()
         return columns
 
+    def introspect_indexes(self, table_name: str) -> list[dict[str, Any]]:
+        query = sa.text(
+            """
+            select index_name, is_unique, expressions
+            from duckdb_indexes()
+            where schema_name = :schema and table_name = :table_name
+              and not is_primary
+            order by index_name
+            """
+        )
+        inspector = sa.inspect(self.engine)
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                query,
+                {
+                    "schema": inspector.default_schema_name or "main",
+                    "table_name": table_name,
+                },
+            )
+            return [
+                {
+                    "name": row.index_name,
+                    "unique": row.is_unique,
+                    "column_names": self._parse_index_expressions(row.expressions),
+                    "dialect_options": {},
+                }
+                for row in rows
+            ]
+
+    @staticmethod
+    def _parse_index_expressions(expressions: str) -> list[str]:
+        # duckdb_indexes() exposes a rendered list rather than a structured
+        # array. This handles ordinary column indexes; expression indexes are
+        # intentionally returned as their SQL text.
+        value = expressions.strip()
+        if value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
+        if not value:
+            return []
+        return [part.strip().strip("'\"") for part in value.split(",")]
+
+    def table_schema(self, table_name: str) -> str:
+        query = sa.text(
+            """
+            select sql from duckdb_tables()
+            where schema_name = :schema and table_name = :table_name
+            """
+        )
+        with self.engine.connect() as connection:
+            value = connection.scalar(
+                query,
+                {
+                    "schema": sa.inspect(self.engine).default_schema_name or "main",
+                    "table_name": table_name,
+                },
+            )
+        return value or super().table_schema(table_name)
+
     def primary_keys(self, table_name: str) -> list[str]:
         reflected = super().primary_keys(table_name)
         if reflected:
@@ -119,3 +177,20 @@ class DuckDBDatabase(Database):
             sequence = sa.Sequence(f"{table_name}_{column_name}_seq", metadata=metadata)
             return [sequence], {"server_default": sequence.next_value()}
         return [], {"autoincrement": False}
+
+    def drop_table(self, table_name: str) -> None:
+        columns = self.introspect_columns(table_name)
+        sequence_names = []
+        for column in columns:
+            default = str(column.get("default") or "")
+            if default.startswith("nextval('") and default.endswith("')"):
+                sequence_names.append(
+                    default.removeprefix("nextval('").removesuffix("')")
+                )
+        super().drop_table(table_name)
+        preparer = self.engine.dialect.identifier_preparer
+        with self.engine.begin() as connection:
+            for sequence_name in sequence_names:
+                connection.exec_driver_sql(
+                    f"DROP SEQUENCE IF EXISTS {preparer.quote(sequence_name)}"
+                )
