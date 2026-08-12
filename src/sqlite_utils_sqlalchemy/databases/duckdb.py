@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import sqlalchemy as sa
-from duckdb_engine import insert
+from sqlalchemy.dialects.postgresql import insert
 
 from ..db import Database
 
