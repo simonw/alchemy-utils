@@ -27,6 +27,10 @@ class PrimaryKeyRequired(Exception):
     """The operation needs a declared primary key."""
 
 
+class InvalidColumns(Exception):
+    """One or more input columns do not exist on the target table."""
+
+
 class Column(NamedTuple):
     """Compatibility-shaped description of an introspected column."""
 
@@ -456,6 +460,9 @@ class Table:
         records_list = [dict(record) for record in records]
         self.last_pk = None
         self.last_rowid = None
+        upsert_pk_names = self._effective_pk(pk) if upsert else []
+        if upsert and not upsert_pk_names:
+            raise PrimaryKeyRequired("upsert() requires a pk")
         if not records_list:
             return self
 
@@ -472,12 +479,18 @@ class Table:
 
         table = self._sa_table()
         table_names = [column.name for column in table.columns]
+        input_names = set().union(*(record.keys() for record in records_list))
+        unknown_names = sorted(input_names.difference(table_names))
+        if unknown_names:
+            raise InvalidColumns(
+                f"Invalid column{'s' if len(unknown_names) != 1 else ''} "
+                f"{unknown_names} for table {self.name}"
+            )
         normalized = [
             {
                 name: record.get(name)
                 for name in table_names
-                if name in record
-                or name in set().union(*(r.keys() for r in records_list))
+                if name in record or name in input_names
             }
             for record in records_list
         ]
@@ -492,9 +505,7 @@ class Table:
                 connection.execute(sa.delete(table))
 
         if upsert:
-            pk_names = self._effective_pk(pk)
-            if not pk_names:
-                raise PrimaryKeyRequired("upsert() requires a pk")
+            pk_names = upsert_pk_names
             for record in records_list:
                 if any(record.get(name) is None for name in pk_names):
                     raise PrimaryKeyRequired(
