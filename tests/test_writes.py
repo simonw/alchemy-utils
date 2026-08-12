@@ -102,6 +102,64 @@ def test_upsert_validates_primary_key_values(db):
         table.upsert({"id": None, "name": "null id"})
 
 
+def test_primary_key_only_upsert_does_nothing_on_conflict(db):
+    table = db["items"].upsert({"id": 1}, pk="id")
+
+    assert table.upsert({"id": 1}) is table
+    assert list(table.rows) == [{"id": 1}]
+
+
+def test_duplicate_keys_in_upsert_all_are_applied_in_order(db):
+    table = db["items"].upsert_all(
+        [
+            {"id": 1, "name": "first"},
+            {"id": 1, "name": "second"},
+            {"id": 1, "name": "last"},
+        ],
+        pk="id",
+    )
+
+    assert table.get(1)["name"] == "last"
+
+
+def test_insert_all_is_atomic(db):
+    table = db["items"].create({"id": int, "name": str}, pk="id")
+
+    with pytest.raises(IntegrityError):
+        table.insert_all(
+            [
+                {"id": 1, "name": "first"},
+                {"id": 1, "name": "duplicate"},
+            ]
+        )
+
+    assert table.count == 0
+
+
+def test_generated_integer_primary_keys_in_bulk(db):
+    table = db["items"].insert_all(
+        [{"name": "first"}, {"name": "second"}], pk="id"
+    )
+
+    assert sorted(table.rows, key=lambda row: row["id"]) == [
+        {"id": 1, "name": "first"},
+        {"id": 2, "name": "second"},
+    ]
+    assert table.last_pk is None
+
+
+def test_reserved_identifiers_are_quoted(db):
+    table = db["select"].insert(
+        {"key": 1, "from": "source", "Mixed Case": "value"}, pk="key"
+    )
+
+    assert table.get(1) == {
+        "key": 1,
+        "from": "source",
+        "Mixed Case": "value",
+    }
+
+
 def test_update_by_single_and_compound_primary_key(db):
     people = db["people"].insert({"id": 1, "name": "Ada"}, pk="id")
 
