@@ -224,9 +224,8 @@ def test_default_tables_output_and_views(tmp_path: Path):
     url = str(path)
     assert_success(invoke("create-table", url, "one", "id", "integer"))
     assert_success(invoke("create-table", url, "two", "id", "integer"))
-    with Database(path) as db:
-        with db.engine.begin() as connection:
-            connection.exec_driver_sql("CREATE VIEW things AS SELECT id FROM one")
+    with Database(path) as db, db.engine.begin() as connection:
+        connection.exec_driver_sql("CREATE VIEW things AS SELECT id FROM one")
 
     result = invoke("tables", url)
     assert_success(result)
@@ -261,10 +260,10 @@ def test_python_module_entry_point(tmp_path: Path):
     result = subprocess.run(
         [sys.executable, "-m", "sqlite_utils_sqlalchemy", "--help"],
         cwd=tmp_path,
+        check=False,
         capture_output=True,
         text=True,
     )
 
     assert result.returncode == 0, result.stderr
     assert "create-table" in result.stdout
-

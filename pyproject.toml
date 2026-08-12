@@ -13,6 +13,9 @@ dependencies = [
     "typing-extensions>=4.12",
 ]
 
+[project.scripts]
+sqlite-utils-sqlalchemy = "sqlite_utils_sqlalchemy.cli:cli"
+
 [project.optional-dependencies]
 duckdb = [
     "duckdb>=1.5,<1.6",
