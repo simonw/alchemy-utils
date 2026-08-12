@@ -3,9 +3,9 @@ name = "alchemy-utils"
 version = "0.1.0"
 description = "A research spike for a sqlite-utils-style API backed by SQLAlchemy"
 readme = "README.md"
-authors = [
-    { name = "Simon Willison", email = "swillison@gmail.com" }
-]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "Simon Willison"}]
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1,<9",
