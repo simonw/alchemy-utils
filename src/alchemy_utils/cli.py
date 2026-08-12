@@ -58,7 +58,7 @@ def _database(value: str):
         if extra:
             raise click.ClickException(
                 f"The {dialect} driver is not installed; install "
-                f"sqlite-utils-sqlalchemy[{extra}]"
+                f"alchemy-utils[{extra}]"
             ) from ex
         missing_name = getattr(ex, "name", None) or str(ex)
         raise click.ClickException(
@@ -369,7 +369,7 @@ def _primary_key_value(table: Any, value: str) -> Any:
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(
-    package_name="sqlite-utils-sqlalchemy", prog_name="sqlite-utils-sqlalchemy"
+    package_name="alchemy-utils", prog_name="alchemy-utils"
 )
 def cli() -> None:
     """Use a sqlite-utils-style API with SQLite, PostgreSQL, or DuckDB."""

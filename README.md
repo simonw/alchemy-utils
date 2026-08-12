@@ -1,4 +1,4 @@
-# sqlite-utils-sqlalchemy
+# alchemy-utils
 
 An executable research spike for a subset of the
 [`sqlite-utils`](https://sqlite-utils.datasette.io/) Python API backed by
@@ -8,7 +8,7 @@ It demonstrates the same style of table-first API across SQLite, PostgreSQL,
 and DuckDB:
 
 ```python
-from sqlite_utils_sqlalchemy import Database
+from alchemy_utils import Database
 
 db = Database("sqlite:///:memory:")
 
@@ -91,9 +91,9 @@ The base package needs Click and SQLAlchemy and works with Python 3.10 or
 later. Engine drivers are extras:
 
 ```bash
-pip install sqlite-utils-sqlalchemy
-pip install 'sqlite-utils-sqlalchemy[postgresql]'
-pip install 'sqlite-utils-sqlalchemy[duckdb]'
+pip install alchemy-utils
+pip install 'alchemy-utils[postgresql]'
+pip install 'alchemy-utils[duckdb]'
 ```
 
 For this checkout, `uv sync` installs the development group, including both
@@ -101,19 +101,19 @@ drivers and the test tools.
 
 ## Command-line interface
 
-Installing the package adds a collision-safe `sqlite-utils-sqlalchemy` command.
+Installing the package adds a collision-safe `alchemy-utils` command.
 It follows the relevant sqlite-utils command shapes, but its `DATABASE`
 argument can be either a SQLite filename or any installed SQLAlchemy URL:
 
 ```bash
 # SQLite: a bare path
-sqlite-utils-sqlalchemy create-table data.db people \
+alchemy-utils create-table data.db people \
   id integer name text profile json --pk id --not-null name
 
 # PostgreSQL and DuckDB: SQLAlchemy URLs
-sqlite-utils-sqlalchemy tables \
+alchemy-utils tables \
   postgresql+psycopg://user@localhost/app --json
-sqlite-utils-sqlalchemy schema duckdb:///analytics.duckdb
+alchemy-utils schema duckdb:///analytics.duckdb
 ```
 
 For PostgreSQL credentials, prefer libpq environment variables or a password
@@ -127,15 +127,15 @@ standard input, and those formats are also detected from file extensions.
 
 ```bash
 echo '{"id": 1, "name": "Ada"}' \
-  | sqlite-utils-sqlalchemy insert data.db people -
+  | alchemy-utils insert data.db people -
 
 printf '%s\n' \
   '{"id": 1, "name": "Ada Lovelace"}' \
   '{"id": 2, "name": "Grace Hopper"}' \
-  | sqlite-utils-sqlalchemy upsert data.db people - --nl
+  | alchemy-utils upsert data.db people - --nl
 
 echo '{"name": "Amazing Grace", "active": true}' \
-  | sqlite-utils-sqlalchemy update data.db people 2 - --alter
+  | alchemy-utils update data.db people 2 - --alter
 ```
 
 Repeat `--pk` for compound keys. `get` and `update` accept a JSON array for a
@@ -148,7 +148,7 @@ rows use normalized JSON (or JSON lines with `--nl` where offered); schema is
 engine-shaped reflected DDL. `tables` and `views` use JSON by default, with
 `--plain` for one name per line. Mutations are silent on success, as in
 sqlite-utils. Run any command with `--help` for its options. The same interface
-is also available as `python -m sqlite_utils_sqlalchemy`.
+is also available as `python -m alchemy_utils`.
 
 ## Test
 

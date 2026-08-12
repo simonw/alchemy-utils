@@ -1,6 +1,6 @@
 from sqlalchemy import URL
 
-from sqlite_utils_sqlalchemy import (
+from alchemy_utils import (
     Database,
     DuckDBDatabase,
     PostgreSQLDatabase,

@@ -1,5 +1,5 @@
 [project]
-name = "sqlite-utils-sqlalchemy"
+name = "alchemy-utils"
 version = "0.1.0"
 description = "A research spike for a sqlite-utils-style API backed by SQLAlchemy"
 readme = "README.md"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-sqlite-utils-sqlalchemy = "sqlite_utils_sqlalchemy.cli:cli"
+alchemy-utils = "alchemy_utils.cli:cli"
 
 [project.optional-dependencies]
 duckdb = [

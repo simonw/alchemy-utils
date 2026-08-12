@@ -10,9 +10,9 @@ import sqlalchemy as sa
 from click.testing import CliRunner
 from sqlalchemy.engine import Engine
 
-import sqlite_utils_sqlalchemy.cli as cli_module
-from sqlite_utils_sqlalchemy import Database
-from sqlite_utils_sqlalchemy.cli import cli
+import alchemy_utils.cli as cli_module
+from alchemy_utils import Database
+from alchemy_utils.cli import cli
 
 
 def invoke(*args: str, input: str | None = None):
@@ -53,7 +53,7 @@ def test_version():
     result = invoke("--version")
 
     assert_success(result)
-    assert result.stdout == "sqlite-utils-sqlalchemy, version 0.1.0\n"
+    assert result.stdout == "alchemy-utils, version 0.1.0\n"
 
 
 def test_create_insert_upsert_update_and_read(engine: Engine):
@@ -589,7 +589,7 @@ def test_missing_duckdb_extra_has_an_install_hint(monkeypatch: pytest.MonkeyPatc
     result = invoke("tables", "duckdb:///missing.duckdb")
 
     assert result.exit_code == 1
-    assert "sqlite-utils-sqlalchemy[duckdb]" in result.stderr
+    assert "alchemy-utils[duckdb]" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -627,7 +627,7 @@ def test_usage_errors(args: tuple[str, ...], message: str, tmp_path: Path):
 
 def test_python_module_entry_point(tmp_path: Path):
     result = subprocess.run(
-        [sys.executable, "-m", "sqlite_utils_sqlalchemy", "--help"],
+        [sys.executable, "-m", "alchemy_utils", "--help"],
         cwd=tmp_path,
         check=False,
         capture_output=True,

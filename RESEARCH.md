@@ -17,7 +17,7 @@ The prototype proves the requested surface on SQLite, PostgreSQL, and DuckDB:
 - single-record `last_pk`, mapping/JSON round trips, conflict options,
   identifier quoting, ordered duplicate upserts, and atomic bulk writes.
 
-The installed `sqlite-utils-sqlalchemy` command exercises that same portable
+The installed `alchemy-utils` command exercises that same portable
 surface against filenames or SQLAlchemy URLs. It covers create, JSON/JSONL/CSV/
 TSV insert and upsert, primary-key update, row reads, and normalized table,
 column, foreign-key, index, and schema introspection. Mutations retain the
@@ -164,8 +164,8 @@ larger multi-month effort and should be scoped separately.
 
 ## Dependency and release notes
 
-The spike deliberately uses the distribution name `sqlite-utils-sqlalchemy` and
-module `sqlite_utils_sqlalchemy`. The initially tempting name
+The spike deliberately uses the distribution name `alchemy-utils` and
+module `alchemy_utils`. The initially tempting name
 `sqlalchemy-utils` is already occupied by a different established project.
 
 SQLAlchemy is the only required database package. PostgreSQL and DuckDB drivers

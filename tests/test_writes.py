@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from sqlite_utils_sqlalchemy import InvalidColumns, NotFoundError, PrimaryKeyRequired
+from alchemy_utils import InvalidColumns, NotFoundError, PrimaryKeyRequired
 
 
 def test_insert_all_infers_union_of_columns(db):
