@@ -1,6 +1,6 @@
 [project]
 name = "alchemy-utils"
-version = "0.1a0"
+version = "0.1a1"
 description = "A research spike for a sqlite-utils-style API backed by SQLAlchemy"
 readme = "README.md"
 license = "Apache-2.0"
