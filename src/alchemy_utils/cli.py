@@ -9,7 +9,7 @@ import functools
 import json
 import pathlib
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any, TextIO, TypeVar, cast
@@ -199,8 +199,10 @@ def _decode_binary_value(value: Any) -> Any:
 
 def _read_records(
     filename: str, *, nl: bool, csv: bool, tsv: bool
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[Iterable[dict[str, Any]], bool]:
     input_format = _selected_input_format(filename, nl=nl, csv=csv, tsv=tsv)
+    if input_format in ("csv", "tsv"):
+        return _read_delimited_records(filename, input_format=input_format), False
     with click.open_file(filename, mode="r", encoding="utf-8-sig") as file:
         stream = cast(TextIO, file)
         if input_format == "json":
@@ -218,12 +220,20 @@ def _read_records(
                 for line in stream
                 if line.strip()
             ], False
+
+
+def _read_delimited_records(
+    filename: str, *, input_format: str
+) -> Iterator[dict[str, Any]]:
+    with click.open_file(filename, mode="r", encoding="utf-8-sig") as file:
+        stream = cast(TextIO, file)
         reader = csv_stdlib.DictReader(
             stream, dialect="excel-tab" if input_format == "tsv" else "excel"
         )
         if reader.fieldnames is None:
             raise click.ClickException("CSV/TSV input must include a header row")
-        return [dict(row) for row in reader], False
+        for row in reader:
+            yield dict(row)
 
 
 def _coerce_value(
@@ -287,17 +297,17 @@ def _python_type_for_name(type_name: str) -> type[Any]:
 
 
 def _coerce_records(
-    records: list[dict[str, Any]],
+    records: Iterable[dict[str, Any]],
     reflected_types: Mapping[str, type[Any]],
     explicit_types: Mapping[str, str],
     *,
     strict: bool,
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     types = dict(reflected_types)
     types.update(
         {name: _python_type_for_name(type_name) for name, type_name in explicit_types.items()}
     )
-    return [
+    return (
         {
             name: _coerce_value(
                 value, types.get(name, str), column_name=name, strict=strict
@@ -305,7 +315,7 @@ def _coerce_records(
             for name, value in record.items()
         }
         for record in records
-    ]
+    )
 
 
 def _serializable_columns(table: Any) -> list[dict[str, Any]]:
@@ -431,6 +441,7 @@ def _write_options(function: F) -> F:
         click.option("--nl", is_flag=True, help="Read newline-delimited JSON."),
         click.option("--csv", is_flag=True, help="Read CSV with a header row."),
         click.option("--tsv", is_flag=True, help="Read TSV with a header row."),
+        click.option("--batch-size", type=click.IntRange(min=1), default=100, show_default=True, help="Number of records to insert per batch."),
         click.option("types", "--type", multiple=True, type=(str, click.Choice(VALID_COLUMN_TYPES, case_sensitive=False)), help="Column and type to use when creating the table."),
         click.option("--alter", is_flag=True, help="Add nullable columns missing from an existing table."),
         click.option("not_null", "--not-null", multiple=True, help="Column to make NOT NULL when creating the table."),
@@ -450,6 +461,7 @@ def _perform_write(
     nl: bool,
     csv: bool,
     tsv: bool,
+    batch_size: int,
     types: tuple[tuple[str, str], ...],
     alter: bool,
     not_null: tuple[str, ...],
@@ -461,6 +473,7 @@ def _perform_write(
 ) -> None:
     if ignore and replace:
         raise click.ClickException("Use either --ignore or --replace, not both")
+    input_format = _selected_input_format(file, nl=nl, csv=csv, tsv=tsv)
     records, single = _read_records(file, nl=nl, csv=csv, tsv=tsv)
     type_overrides = {name: type_name.upper() for name, type_name in types}
     pk: str | tuple[str, ...] | None = None
@@ -485,15 +498,21 @@ def _perform_write(
             "not_null": not_null,
             "defaults": _parse_defaults(defaults),
             "columns": type_overrides,
+            "batch_size": batch_size,
+            "stream": input_format in ("csv", "tsv"),
         }
         if upsert:
             if single:
-                table.upsert(records[0], **kwargs)
+                table.upsert(next(iter(records)), **kwargs)
             else:
                 table.upsert_all(records, **kwargs)
         elif single:
             table.insert(
-                records[0], ignore=ignore, replace=replace, truncate=truncate, **kwargs
+                next(iter(records)),
+                ignore=ignore,
+                replace=replace,
+                truncate=truncate,
+                **kwargs,
             )
         else:
             table.insert_all(
@@ -536,9 +555,9 @@ def update(
         raise click.ClickException("update input must be one JSON object")
     with _database(database) as db:
         table = db[table_name]
-        updates = _coerce_records(
-            records, table.columns_dict, {}, strict=table.exists()
-        )[0]
+        updates = next(
+            _coerce_records(records, table.columns_dict, {}, strict=table.exists())
+        )
         table.update(_primary_key_value(table, pk_value), updates, alter=alter)
 
 

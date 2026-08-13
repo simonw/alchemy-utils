@@ -1,3 +1,6 @@
+import importlib.util
+import sys
+
 from sqlalchemy import URL
 
 from alchemy_utils import (
@@ -59,3 +62,23 @@ def test_duckdb_replace_reuses_generated_primary_key_sequence(tmp_path):
     table.insert({"name": "Ada"})
 
     assert table.last_pk == 1
+
+
+def test_duckdb_bulk_insert_temporarily_caches_missing_pandas(tmp_path, monkeypatch):
+    database = Database(f"duckdb:///{tmp_path / 'bulk.duckdb'}")
+    find_spec_calls = 0
+
+    def missing_pandas(name):
+        nonlocal find_spec_calls
+        assert name == "pandas"
+        find_spec_calls += 1
+
+    monkeypatch.delitem(sys.modules, "pandas", raising=False)
+    monkeypatch.setattr(importlib.util, "find_spec", missing_pandas)
+
+    with database.bulk_insert_context():
+        assert "pandas" in sys.modules
+        assert sys.modules["pandas"] is None
+
+    assert "pandas" not in sys.modules
+    assert find_spec_calls == 1

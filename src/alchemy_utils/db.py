@@ -6,6 +6,7 @@ import itertools
 import pathlib
 import uuid
 from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -238,6 +239,11 @@ class Database:
             f"Inserts are not implemented for {self.engine.dialect.name}"
         )
 
+    @contextmanager
+    def bulk_insert_context(self) -> Generator[None, None, None]:
+        """Apply dialect-specific setup around a bulk insert."""
+        yield
+
     def insert_ignore_statement(self, table: sa.Table) -> Any:
         del table
         raise NotImplementedError(
@@ -466,121 +472,190 @@ class Table:
         replace: bool = False,
         truncate: bool = False,
         upsert: bool = False,
+        stream: bool = False,
         columns: Mapping[str, Any] | None = None,
         **create_kwargs: Any,
     ) -> Self:
-        del batch_size
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        with self.db.bulk_insert_context():
+            return self._insert_all(
+                records,
+                pk,
+                batch_size=batch_size,
+                alter=alter,
+                ignore=ignore,
+                replace=replace,
+                truncate=truncate,
+                upsert=upsert,
+                stream=stream,
+                columns=columns,
+                **create_kwargs,
+            )
+
+    def _insert_all(
+        self,
+        records: Iterable[Mapping[str, Any]],
+        pk: str | tuple[str, ...] | list[str] | None,
+        *,
+        batch_size: int,
+        alter: bool,
+        ignore: bool,
+        replace: bool,
+        truncate: bool,
+        upsert: bool,
+        stream: bool,
+        columns: Mapping[str, Any] | None,
+        **create_kwargs: Any,
+    ) -> Self:
         if ignore and replace:
             raise ValueError("Use either ignore=True or replace=True, not both")
-        records_list = [dict(record) for record in records]
         self.last_pk = None
         self.last_rowid = None
         upsert_pk_names = self._effective_pk(pk) if upsert else []
         if upsert and not upsert_pk_names:
             raise PrimaryKeyRequired("upsert() requires a pk")
-        if not records_list:
+
+        records_iterator = iter(records)
+        try:
+            first_record = next(records_iterator)
+        except StopIteration:
             if truncate and self.exists():
                 table = self._sa_table()
                 with self.db.engine.begin() as connection:
                     connection.execute(sa.delete(table))
             return self
 
-        if not self.exists():
-            names = list(dict.fromkeys(itertools.chain.from_iterable(records_list)))
+        try:
+            second_record = next(records_iterator)
+        except StopIteration:
+            single_input = True
+            record_source: Iterable[Mapping[str, Any]] = (first_record,)
+        else:
+            single_input = False
+            record_source = itertools.chain(
+                (first_record, second_record), records_iterator
+            )
+        first_record = dict(first_record)
+        table_existed = self.exists()
+
+        def record_batches() -> Generator[list[dict[str, Any]], None, None]:
+            iterator = iter(record_source)
+            while batch := [
+                dict(record) for record in itertools.islice(iterator, batch_size)
+            ]:
+                yield batch
+
+        if alter or (not table_existed and not stream):
+            all_records = list(itertools.chain.from_iterable(record_batches()))
+            inference_records = all_records
+
+            def batches() -> Generator[list[dict[str, Any]], None, None]:
+                iterator = iter(all_records)
+                while batch := list(itertools.islice(iterator, batch_size)):
+                    yield batch
+
+            batch_iterator: Iterable[list[dict[str, Any]]] = batches()
+        else:
+            remaining_batches = record_batches()
+            first_batch = next(remaining_batches)
+            inference_records = first_batch
+            batch_iterator = itertools.chain((first_batch,), remaining_batches)
+
+        if not table_existed:
+            names = list(
+                dict.fromkeys(itertools.chain.from_iterable(inference_records))
+            )
             inferred = {
-                name: _suggest_type(record.get(name) for record in records_list)
+                name: _suggest_type(record.get(name) for record in inference_records)
                 for name in names
             }
             inferred.update(columns or {})
             self.create(inferred, pk=pk, **create_kwargs)
         elif alter:
-            self._ensure_missing_columns(records_list)
+            self._ensure_missing_columns(inference_records)
 
         table = self._sa_table()
         table_names = [column.name for column in table.columns]
-        input_names = set().union(*(record.keys() for record in records_list))
-        unknown_names = sorted(input_names.difference(table_names))
-        if unknown_names:
-            raise InvalidColumns(
-                f"Invalid column{'s' if len(unknown_names) != 1 else ''} "
-                f"{unknown_names} for table {self.name}"
-            )
-        normalized = [
-            {
-                name: record.get(name)
-                for name in table_names
-                if name in record or name in input_names
-            }
-            for record in records_list
-        ]
-        # Avoid supplying omitted generated primary keys as explicit NULLs.
-        for record, normalized_record in zip(records_list, normalized):
-            for name in self.pks:
-                if name not in record:
-                    normalized_record.pop(name, None)
-
-        if upsert:
-            pk_names = upsert_pk_names
-            for record in records_list:
-                if any(record.get(name) is None for name in pk_names):
-                    raise PrimaryKeyRequired(
-                        "upsert() requires values for every pk column"
-                    )
-            with self.db.engine.begin() as connection:
-                if truncate:
-                    connection.execute(sa.delete(table))
-                for record in normalized:
-                    update_names = [name for name in record if name not in pk_names]
-                    statement = self.db.upsert_statement(table, pk_names, update_names)
-                    connection.execute(statement, record)
+        pk_names = upsert_pk_names if upsert else self.pks
+        if ignore:
+            statement = self.db.insert_ignore_statement(table)
+        elif replace:
+            if not pk_names:
+                raise PrimaryKeyRequired("replace=True requires a primary key")
+            update_names = [name for name in table_names if name not in pk_names]
+            statement = self.db.insert_replace_statement(table, pk_names, update_names)
         else:
-            if ignore:
-                statement = self.db.insert_ignore_statement(table)
-            elif replace:
-                pk_names = self.pks
-                if not pk_names:
-                    raise PrimaryKeyRequired("replace=True requires a primary key")
-                update_names = [name for name in table_names if name not in pk_names]
-                statement = self.db.insert_replace_statement(
-                    table, pk_names, update_names
-                )
-            else:
-                statement = self.db.insert_statement(table)
-            returned_pk: tuple[Any, ...] | None = None
-            single_generated_pk = (
-                len(records_list) == 1
-                and bool(self.pks)
-                and not all(name in records_list[0] for name in self.pks)
-                and not ignore
-            )
-            with self.db.engine.begin() as connection:
-                if truncate:
-                    connection.execute(sa.delete(table))
-                if single_generated_pk:
+            statement = self.db.insert_statement(table)
+        returned_pk: tuple[Any, ...] | None = None
+        result: Any | None = None
+        single_generated_pk = (
+            single_input
+            and bool(pk_names)
+            and not all(name in first_record for name in pk_names)
+            and not ignore
+        )
+
+        with self.db.engine.begin() as connection:
+            if truncate:
+                connection.execute(sa.delete(table))
+            for records_batch in batch_iterator:
+                input_names = set().union(*(record.keys() for record in records_batch))
+                unknown_names = sorted(input_names.difference(table_names))
+                if unknown_names:
+                    raise InvalidColumns(
+                        f"Invalid column{'s' if len(unknown_names) != 1 else ''} "
+                        f"{unknown_names} for table {self.name}"
+                    )
+                normalized = [
+                    {
+                        name: record.get(name)
+                        for name in table_names
+                        if name in record or name in input_names
+                    }
+                    for record in records_batch
+                ]
+                # Avoid supplying omitted generated primary keys as explicit NULLs.
+                for record, normalized_record in zip(records_batch, normalized):
+                    for name in pk_names:
+                        if name not in record:
+                            normalized_record.pop(name, None)
+
+                if upsert:
+                    for record in records_batch:
+                        if any(record.get(name) is None for name in pk_names):
+                            raise PrimaryKeyRequired(
+                                "upsert() requires values for every pk column"
+                            )
+                    for record in normalized:
+                        update_names = [name for name in record if name not in pk_names]
+                        upsert_statement = self.db.upsert_statement(
+                            table, pk_names, update_names
+                        )
+                        connection.execute(upsert_statement, record)
+                elif single_generated_pk:
                     result = connection.execute(
-                        statement.returning(*(table.c[name] for name in self.pks)),
+                        statement.returning(*(table.c[name] for name in pk_names)),
                         normalized[0],
                     )
                     returned_pk = tuple(result.one())
                 else:
                     result = connection.execute(statement, normalized)
 
-            if len(records_list) == 1:
-                pk_names = self.pks
-                original = records_list[0]
-                if pk_names and all(name in original for name in pk_names):
-                    values = tuple(original[name] for name in pk_names)
-                    self.last_pk = values[0] if len(values) == 1 else values
-                elif returned_pk is not None:
-                    values = returned_pk
-                    self.last_pk = values[0] if len(values) == 1 else values
-                elif result.inserted_primary_key:
-                    values = tuple(result.inserted_primary_key)
-                    self.last_pk = values[0] if len(values) == 1 else values
+        if not upsert and single_input:
+            original = first_record
+            if pk_names and all(name in original for name in pk_names):
+                values = tuple(original[name] for name in pk_names)
+                self.last_pk = values[0] if len(values) == 1 else values
+            elif returned_pk is not None:
+                values = returned_pk
+                self.last_pk = values[0] if len(values) == 1 else values
+            elif result is not None and result.inserted_primary_key:
+                values = tuple(result.inserted_primary_key)
+                self.last_pk = values[0] if len(values) == 1 else values
 
-        if upsert and len(records_list) == 1:
-            pk_names = self._effective_pk(pk)
-            values = tuple(records_list[0][name] for name in pk_names)
+        if upsert and single_input:
+            values = tuple(first_record[name] for name in pk_names)
             self.last_pk = values[0] if len(values) == 1 else values
         return self
 

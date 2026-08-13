@@ -1,4 +1,5 @@
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 
 from alchemy_utils import InvalidColumns, NotFoundError, PrimaryKeyRequired
@@ -168,6 +169,82 @@ def test_insert_all_is_atomic(db):
         )
 
     assert table.count == 0
+
+
+def test_insert_all_is_atomic_across_batches(db):
+    table = db["items"].create({"id": int, "name": str}, pk="id")
+
+    with pytest.raises(IntegrityError):
+        table.insert_all(
+            [
+                {"id": 1, "name": "first"},
+                {"id": 2, "name": "second"},
+                {"id": 2, "name": "duplicate"},
+            ],
+            batch_size=2,
+        )
+
+    assert table.count == 0
+
+
+def test_insert_all_streams_batches(db):
+    insert_count = 0
+
+    def count_inserts(*args):
+        nonlocal insert_count
+        statement = args[2]
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_count += 1
+
+    sa.event.listen(db.engine, "before_cursor_execute", count_inserts)
+
+    def records():
+        yield {"id": 1, "name": "first"}
+        yield {"id": 2, "name": "second"}
+        assert insert_count > 0
+        yield {"id": 3, "name": "third"}
+
+    try:
+        table = db["items"].insert_all(records(), pk="id", batch_size=2, stream=True)
+    finally:
+        sa.event.remove(db.engine, "before_cursor_execute", count_inserts)
+
+    assert table.count == 3
+    assert insert_count == 2
+
+
+def test_new_table_inference_still_scans_non_streaming_iterables(db):
+    table = db["items"].insert_all(
+        iter(({"id": 1}, {"id": 2, "name": "second"})),
+        pk="id",
+        batch_size=1,
+    )
+
+    assert set(table.columns_dict) == {"id", "name"}
+
+
+def test_insert_all_reflects_primary_keys_once(db, monkeypatch):
+    table = db["items"].create({"id": int, "name": str}, pk="id")
+    original = db.primary_keys
+    call_count = 0
+
+    def counted_primary_keys(table_name):
+        nonlocal call_count
+        call_count += 1
+        return original(table_name)
+
+    monkeypatch.setattr(db, "primary_keys", counted_primary_keys)
+    table.insert_all(
+        ({"id": value, "name": str(value)} for value in range(5)),
+        batch_size=2,
+    )
+
+    assert call_count == 1
+
+
+def test_insert_all_rejects_invalid_batch_size(db):
+    with pytest.raises(ValueError, match="batch_size"):
+        db["items"].insert_all([{"id": 1}], batch_size=0)
 
 
 def test_generated_integer_primary_keys_in_bulk(db):

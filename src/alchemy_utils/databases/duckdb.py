@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import sys
 import warnings
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
 import sqlalchemy as sa
@@ -12,6 +16,22 @@ from ..db import Database
 
 class DuckDBDatabase(Database):
     """DuckDB workarounds for gaps in duckdb-engine 0.17 reflection and DDL."""
+
+    @contextmanager
+    def bulk_insert_context(self) -> Generator[None, None, None]:
+        # DuckDB checks for pandas while binding Python values. When pandas is
+        # absent, each check repeats a full import-system search. Cache that
+        # confirmed miss for the duration of the bulk operation, then restore
+        # sys.modules so this workaround has no lasting process-wide effect.
+        if "pandas" in sys.modules or importlib.util.find_spec("pandas") is not None:
+            yield
+            return
+        sys.modules["pandas"] = None
+        try:
+            yield
+        finally:
+            if sys.modules.get("pandas") is None:
+                sys.modules.pop("pandas", None)
 
     def insert_statement(self, table: sa.Table) -> Any:
         return insert(table)
