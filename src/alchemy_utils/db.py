@@ -827,8 +827,7 @@ class Table:
                 origin="c",
                 partial=int(
                     any(
-                        (reflected.get("dialect_options") or {}).get(option)
-                        is not None
+                        (reflected.get("dialect_options") or {}).get(option) is not None
                         for option in ("sqlite_where", "postgresql_where")
                     )
                 ),

@@ -525,7 +525,9 @@ def test_view_schema_is_view_ddl(engine: Engine):
     url = database_url(engine)
     assert_success(invoke("create-table", url, "source", "id", "integer"))
     with engine.begin() as connection:
-        connection.exec_driver_sql("CREATE VIEW visible_source AS SELECT id FROM source")
+        connection.exec_driver_sql(
+            "CREATE VIEW visible_source AS SELECT id FROM source"
+        )
 
     result = invoke("views", url, "--schema")
     assert_success(result)
@@ -587,9 +589,7 @@ def test_missing_duckdb_extra_has_an_install_hint(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("command", ("columns", "indexes", "foreign-keys"))
-def test_explicit_missing_table_introspection_is_an_error(
-    command: str, tmp_path: Path
-):
+def test_explicit_missing_table_introspection_is_an_error(command: str, tmp_path: Path):
     result = invoke(command, str(tmp_path / "missing.db"), "not_there")
 
     assert result.exit_code == 1

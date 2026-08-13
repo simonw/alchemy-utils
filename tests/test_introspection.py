@@ -116,7 +116,9 @@ def test_partial_index_introspection(db):
     table = db["people"].create({"id": int, "active": bool}, pk="id")
     with db.engine.begin() as connection:
         connection.execute(
-            text('create index "ix_people_active" on "people" ("active") where "active"')
+            text(
+                'create index "ix_people_active" on "people" ("active") where "active"'
+            )
         )
 
     assert table.indexes[0].partial == 1

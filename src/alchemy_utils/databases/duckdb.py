@@ -66,13 +66,11 @@ class DuckDBDatabase(Database):
             return {
                 row.column_name: row.data_type
                 for row in connection.execute(
-                    sa.text(
-                        """
+                    sa.text("""
                         select column_name, data_type
                         from duckdb_columns()
                         where schema_name = :schema and table_name = :table_name
-                        """
-                    ),
+                        """),
                     {
                         "schema": sa.inspect(self.engine).default_schema_name or "main",
                         "table_name": table_name,
@@ -107,15 +105,13 @@ class DuckDBDatabase(Database):
         return columns
 
     def introspect_indexes(self, table_name: str) -> list[dict[str, Any]]:
-        query = sa.text(
-            """
+        query = sa.text("""
             select index_name, is_unique, expressions
             from duckdb_indexes()
             where schema_name = :schema and table_name = :table_name
               and not is_primary
             order by index_name
-            """
-        )
+            """)
         inspector = sa.inspect(self.engine)
         with self.engine.connect() as connection:
             rows = connection.execute(
@@ -136,16 +132,14 @@ class DuckDBDatabase(Database):
             ]
 
     def introspect_foreign_keys(self, table_name: str) -> list[dict[str, Any]]:
-        query = sa.text(
-            """
+        query = sa.text("""
             select constraint_name, constraint_column_names,
                    referenced_table, referenced_column_names
             from duckdb_constraints()
             where schema_name = :schema and table_name = :table_name
               and constraint_type = 'FOREIGN KEY'
             order by constraint_index
-            """
-        )
+            """)
         with self.engine.connect() as connection:
             return [
                 {
@@ -184,12 +178,10 @@ class DuckDBDatabase(Database):
         return [part.strip().strip("'\"") for part in value.split(",")]
 
     def table_schema(self, table_name: str) -> str:
-        query = sa.text(
-            """
+        query = sa.text("""
             select sql from duckdb_tables()
             where schema_name = :schema and table_name = :table_name
-            """
-        )
+            """)
         with self.engine.connect() as connection:
             value = connection.scalar(
                 query,
@@ -207,8 +199,7 @@ class DuckDBDatabase(Database):
 
         # duckdb-engine does not currently reflect primary keys. DuckDB's
         # information_schema views preserve compound-key declaration order.
-        query = sa.text(
-            """
+        query = sa.text("""
             select kcu.column_name
             from information_schema.table_constraints tc
             join information_schema.key_column_usage kcu
@@ -219,8 +210,7 @@ class DuckDBDatabase(Database):
               and tc.table_name = :table_name
               and tc.constraint_type = 'PRIMARY KEY'
             order by kcu.ordinal_position
-            """
-        )
+            """)
         inspector = sa.inspect(self.engine)
         with self.engine.connect() as connection:
             return list(

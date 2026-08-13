@@ -134,7 +134,9 @@ def _parse_json_or_string(value: str) -> Any:
 
 def _parse_defaults(values: Sequence[tuple[str, str]]) -> dict[str, Any]:
     parsed = {name: _parse_json_or_string(value) for name, value in values}
-    unsupported = [name for name, value in parsed.items() if isinstance(value, (dict, list))]
+    unsupported = [
+        name for name, value in parsed.items() if isinstance(value, (dict, list))
+    ]
     if unsupported:
         raise click.ClickException(
             "Object and array defaults are not portable; unsupported column(s): "
@@ -158,10 +160,10 @@ def _parse_column_pairs(columns: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def _selected_input_format(
-    filename: str, *, nl: bool, csv: bool, tsv: bool
-) -> str:
-    selected = [name for name, enabled in (("nl", nl), ("csv", csv), ("tsv", tsv)) if enabled]
+def _selected_input_format(filename: str, *, nl: bool, csv: bool, tsv: bool) -> str:
+    selected = [
+        name for name, enabled in (("nl", nl), ("csv", csv), ("tsv", tsv)) if enabled
+    ]
     if len(selected) > 1:
         raise click.ClickException("Use only one of --nl, --csv, or --tsv")
     if selected:
@@ -216,9 +218,7 @@ def _read_records(
             return [_verify_record(item) for item in value], False
         if input_format == "nl":
             return [
-                _verify_record(json.loads(line))
-                for line in stream
-                if line.strip()
+                _verify_record(json.loads(line)) for line in stream if line.strip()
             ], False
 
 
@@ -272,7 +272,12 @@ def _coerce_value(
         else:
             return value
         return converted
-    except (ValueError, TypeError, json.JSONDecodeError, decimal.DecimalException) as ex:
+    except (
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+        decimal.DecimalException,
+    ) as ex:
         if strict:
             raise click.ClickException(
                 f"Could not convert column {column_name!r} value {value!r} "
@@ -305,7 +310,10 @@ def _coerce_records(
 ) -> Iterator[dict[str, Any]]:
     types = dict(reflected_types)
     types.update(
-        {name: _python_type_for_name(type_name) for name, type_name in explicit_types.items()}
+        {
+            name: _python_type_for_name(type_name)
+            for name, type_name in explicit_types.items()
+        }
     )
     return (
         {
@@ -378,9 +386,7 @@ def _primary_key_value(table: Any, value: str) -> Any:
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.version_option(
-    package_name="alchemy-utils", prog_name="alchemy-utils"
-)
+@click.version_option(package_name="alchemy-utils", prog_name="alchemy-utils")
 def cli() -> None:
     """Use a sqlite-utils-style API with SQLite, PostgreSQL, or DuckDB."""
 
@@ -389,11 +395,27 @@ def cli() -> None:
 @click.argument("database")
 @click.argument("table_name")
 @click.argument("columns", nargs=-1, required=True)
-@click.option("pks", "--pk", multiple=True, help="Primary-key column; repeat for compound keys.")
+@click.option(
+    "pks", "--pk", multiple=True, help="Primary-key column; repeat for compound keys."
+)
 @click.option("not_null", "--not-null", multiple=True, help="Column to make NOT NULL.")
-@click.option("defaults", "--default", multiple=True, type=(str, str), help="Column and JSON default value.")
-@click.option("foreign_keys", "--fk", multiple=True, type=(str, str, str), help="Column, other table, and other column.")
-@click.option("--ignore", "--if-not-exists", is_flag=True, help="Do nothing if the table exists.")
+@click.option(
+    "defaults",
+    "--default",
+    multiple=True,
+    type=(str, str),
+    help="Column and JSON default value.",
+)
+@click.option(
+    "foreign_keys",
+    "--fk",
+    multiple=True,
+    type=(str, str, str),
+    help="Column, other table, and other column.",
+)
+@click.option(
+    "--ignore", "--if-not-exists", is_flag=True, help="Do nothing if the table exists."
+)
 @click.option("--replace", is_flag=True, help="Drop and recreate an existing table.")
 @_translate_errors
 def create_table(
@@ -437,15 +459,47 @@ def _write_options(function: F) -> F:
         click.argument("database"),
         click.argument("table_name"),
         click.argument("file"),
-        click.option("pks", "--pk", multiple=True, help="Primary-key column; repeat for compound keys."),
+        click.option(
+            "pks",
+            "--pk",
+            multiple=True,
+            help="Primary-key column; repeat for compound keys.",
+        ),
         click.option("--nl", is_flag=True, help="Read newline-delimited JSON."),
         click.option("--csv", is_flag=True, help="Read CSV with a header row."),
         click.option("--tsv", is_flag=True, help="Read TSV with a header row."),
-        click.option("--batch-size", type=click.IntRange(min=1), default=100, show_default=True, help="Number of records to insert per batch."),
-        click.option("types", "--type", multiple=True, type=(str, click.Choice(VALID_COLUMN_TYPES, case_sensitive=False)), help="Column and type to use when creating the table."),
-        click.option("--alter", is_flag=True, help="Add nullable columns missing from an existing table."),
-        click.option("not_null", "--not-null", multiple=True, help="Column to make NOT NULL when creating the table."),
-        click.option("defaults", "--default", multiple=True, type=(str, str), help="Column and JSON default value."),
+        click.option(
+            "--batch-size",
+            type=click.IntRange(min=1),
+            default=100,
+            show_default=True,
+            help="Number of records to insert per batch.",
+        ),
+        click.option(
+            "types",
+            "--type",
+            multiple=True,
+            type=(str, click.Choice(VALID_COLUMN_TYPES, case_sensitive=False)),
+            help="Column and type to use when creating the table.",
+        ),
+        click.option(
+            "--alter",
+            is_flag=True,
+            help="Add nullable columns missing from an existing table.",
+        ),
+        click.option(
+            "not_null",
+            "--not-null",
+            multiple=True,
+            help="Column to make NOT NULL when creating the table.",
+        ),
+        click.option(
+            "defaults",
+            "--default",
+            multiple=True,
+            type=(str, str),
+            help="Column and JSON default value.",
+        ),
     )
     for decorator in reversed(decorators):
         function = decorator(function)
@@ -523,7 +577,9 @@ def _perform_write(
 @cli.command()
 @_write_options
 @click.option("--ignore", is_flag=True, help="Ignore primary-key conflicts.")
-@click.option("--replace", is_flag=True, help="Replace rows with primary-key conflicts.")
+@click.option(
+    "--replace", is_flag=True, help="Replace rows with primary-key conflicts."
+)
 @click.option("--truncate", is_flag=True, help="Delete existing rows before inserting.")
 @_translate_errors
 def insert(**kwargs: Any) -> None:
@@ -544,7 +600,9 @@ def upsert(**kwargs: Any) -> None:
 @click.argument("table_name")
 @click.argument("pk_value")
 @click.argument("file")
-@click.option("--alter", is_flag=True, help="Add nullable columns missing from the table.")
+@click.option(
+    "--alter", is_flag=True, help="Add nullable columns missing from the table."
+)
 @_translate_errors
 def update(
     database: str, table_name: str, pk_value: str, file: str, alter: bool
@@ -584,9 +642,7 @@ def _table_listing(
             if columns:
                 item["columns"] = [column.name for column in table.columns]
             if schema:
-                item["schema"] = (
-                    db.view_schema(name) if views else table.schema
-                )
+                item["schema"] = db.view_schema(name) if views else table.schema
             result.append(item)
     if plain:
         for name in names:
@@ -598,7 +654,9 @@ def _table_listing(
 def _listing_options(function: F) -> F:
     decorators = (
         click.argument("database"),
-        click.option("json_output", "--json", is_flag=True, help="Output a JSON array."),
+        click.option(
+            "json_output", "--json", is_flag=True, help="Output a JSON array."
+        ),
         click.option("--nl", is_flag=True, help="Output newline-delimited JSON."),
         click.option("--plain", is_flag=True, help="Output one name per line."),
         click.option("--counts", is_flag=True, help="Include a row count."),
